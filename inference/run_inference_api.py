@@ -75,9 +75,23 @@ def main() -> None:
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--enable-thinking", action="store_true", help="Anthropic extended thinking / best-effort OpenAI reasoning trace")
     ap.add_argument("--limit", type=int, default=None, help="only run the first N transcripts (smoke test)")
+    ap.add_argument(
+        "--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="DEBUG also logs every API request/response (model, tokens, latency, previews) from api_clients.py",
+    )
+    ap.add_argument("--log-file", type=Path, default=None, help="also write logs to this file, in addition to stdout")
     args = ap.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+    handlers = [logging.StreamHandler()]
+    if args.log_file:
+        args.log_file.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(args.log_file, encoding="utf-8"))
+    logging.basicConfig(
+        level=getattr(logging, args.log_level),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=handlers,
+        force=True,
+    )
 
     try:
         from dotenv import load_dotenv

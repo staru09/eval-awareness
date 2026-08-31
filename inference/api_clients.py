@@ -12,11 +12,22 @@ uniformly.
 """
 from __future__ import annotations
 
+import logging
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
+LOG = logging.getLogger("api_clients")
+
 _ENV_LOADED = False
+
+
+def _preview(text: str | None, n: int = 200) -> str:
+    if not text:
+        return "(empty)"
+    text = text.replace("\n", "\\n")
+    return text[:n] + ("..." if len(text) > n else "")
 
 
 def _ensure_env_loaded() -> None:
@@ -83,16 +94,28 @@ def generate_openai(
     a `reasoning_content` field on the returned message and uses it if
     present, else reasoning_trace stays None.
     """
+    LOG.debug(
+        "-> OpenAI request: model=%s max_tokens=%d temperature=%.2f n_messages=%d last_msg=%r",
+        model, max_tokens, temperature, len(messages), _preview(messages[-1]["content"]),
+    )
+    t0 = time.time()
     resp = client.chat.completions.create(
         model=model,
         messages=messages,
         max_tokens=max_tokens,
         temperature=temperature,
     )
+    elapsed = time.time() - t0
     choice = resp.choices[0]
     final_text = choice.message.content or ""
     reasoning_trace = getattr(choice.message, "reasoning_content", None)
     n_tokens = getattr(getattr(resp, "usage", None), "completion_tokens", None)
+    LOG.debug(
+        "<- OpenAI response in %.2fs: id=%s finish_reason=%s completion_tokens=%s "
+        "reasoning_trace=%s final_text=%r",
+        elapsed, getattr(resp, "id", None), getattr(choice, "finish_reason", None),
+        n_tokens, "present" if reasoning_trace else "none", _preview(final_text),
+    )
     return GenResult(reasoning_trace=reasoning_trace, final_text=final_text, n_output_tokens=n_tokens)
 
 
@@ -135,7 +158,13 @@ def generate_anthropic(
     else:
         kwargs["temperature"] = temperature
 
+    LOG.debug(
+        "-> Anthropic request: model=%s max_tokens=%d thinking=%s n_messages=%d last_msg=%r",
+        model, kwargs["max_tokens"], enable_thinking, len(messages), _preview(messages[-1]["content"]),
+    )
+    t0 = time.time()
     resp = client.messages.create(**kwargs)
+    elapsed = time.time() - t0
 
     thinking_parts, text_parts = [], []
     for block in resp.content:
@@ -147,6 +176,12 @@ def generate_anthropic(
     reasoning_trace = "\n".join(thinking_parts).strip() or None
     final_text = "\n".join(text_parts).strip()
     n_tokens = getattr(getattr(resp, "usage", None), "output_tokens", None)
+    LOG.debug(
+        "<- Anthropic response in %.2fs: id=%s stop_reason=%s output_tokens=%s "
+        "reasoning_trace=%s final_text=%r",
+        elapsed, getattr(resp, "id", None), getattr(resp, "stop_reason", None),
+        n_tokens, "present" if reasoning_trace else "none", _preview(final_text),
+    )
     return GenResult(reasoning_trace=reasoning_trace, final_text=final_text, n_output_tokens=n_tokens)
 
 
