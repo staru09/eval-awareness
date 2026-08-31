@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Runner: benchmark multiple OpenAI/Anthropic models against the
 eval-awareness dataset, recording per-model logs and an aggregated
 metrics summary.
@@ -28,6 +27,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -45,6 +45,20 @@ DEFAULT_LOG_DIR = HERE.parent / "output" / "logs"
 
 def slugify(model: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_.-]+", "-", model)
+
+
+def build_run_slug(model_specs: list[tuple[str, str]]) -> str:
+    """Compact, filesystem-safe slug identifying this run's model set, e.g.
+    'openai-gpt-4o_anthropic-claude-sonnet-4-6'. Long combos (many models)
+    are truncated and suffixed with a short content hash to stay a sane
+    filename length while remaining distinct from other multi-model combos.
+    """
+    parts = [f"{provider}-{slugify(model)}" for provider, model in model_specs]
+    slug = "_".join(parts)
+    if len(slug) > 80:
+        digest = hashlib.sha256(slug.encode()).hexdigest()[:8]
+        slug = f"{slug[:70]}-{digest}"
+    return slug
 
 
 def parse_model_spec(spec: str) -> tuple[str, str]:
@@ -203,8 +217,14 @@ def main() -> None:
     )
     ap.add_argument("--limit", type=int, default=None, help="only run the first N transcripts per model (smoke test)")
     ap.add_argument("--resume", action="store_true", help="skip models that already have results/verbalized_auroc.json")
-    ap.add_argument("--summary-json", default=None, type=Path)
-    ap.add_argument("--summary-md", default=None, type=Path)
+    ap.add_argument(
+        "--summary-json", default=None, type=Path,
+        help="override the default timestamped path (default: out-root/Benchmark-<model-slug>-<timestamp>.json)",
+    )
+    ap.add_argument(
+        "--summary-md", default=None, type=Path,
+        help="override the default timestamped path (default: out-root/Benchmark-<model-slug>-<timestamp>.md)",
+    )
     args = ap.parse_args()
 
     model_specs = [parse_model_spec(m) for m in args.models]
@@ -214,8 +234,15 @@ def main() -> None:
 
     out_root = Path(args.out_root)
     log_dir = Path(args.log_dir)
-    summary_json = args.summary_json or (out_root / "benchmark_summary.json")
-    summary_md = args.summary_md or (out_root / "BENCHMARK_SUMMARY.md")
+
+    # Every invocation gets its own timestamped summary files, so past runs
+    # are never overwritten and stay reviewable later (per-model output
+    # under out_root/<provider>__<model>/ is likewise never overwritten
+    # unless the same model is re-run).
+    run_timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    run_slug = build_run_slug(model_specs)
+    summary_json = args.summary_json or (out_root / f"Benchmark-{run_slug}-{run_timestamp}.json")
+    summary_md = args.summary_md or (out_root / f"Benchmark-{run_slug}-{run_timestamp}.md")
 
     run_statuses = []
     for spec_str, (provider, model) in zip(args.models, model_specs):
