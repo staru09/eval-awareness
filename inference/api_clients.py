@@ -184,9 +184,11 @@ def _generate_openai_reasoning(
     elapsed = time.time() - t0
 
     reasoning_parts, text_parts = [], []
+    saw_reasoning_item = False
     for item in getattr(resp, "output", None) or []:
         item_type = getattr(item, "type", None)
         if item_type == "reasoning":
+            saw_reasoning_item = True
             for s in getattr(item, "summary", None) or []:
                 text = getattr(s, "text", None) or getattr(s, "content", None)
                 if text:
@@ -199,6 +201,21 @@ def _generate_openai_reasoning(
     reasoning_trace = "\n".join(reasoning_parts).strip() or None
     final_text = "\n".join(text_parts).strip() or (getattr(resp, "output_text", None) or "")
     n_tokens = getattr(getattr(resp, "usage", None), "output_tokens", None)
+    if saw_reasoning_item and not reasoning_trace:
+        LOG.warning(
+            "OpenAI response for %s included a 'reasoning' output item but its summary "
+            "was empty -- reasoning_trace will be null. This usually means either (a) the "
+            "org isn't verified for reasoning summaries (see "
+            "https://platform.openai.com/settings/organization/general), or (b) the model "
+            "judged this prompt too trivial to produce a visible summary at "
+            "reasoning.effort=%s. Not necessarily a bug.",
+            model, reasoning_effort,
+        )
+    elif not saw_reasoning_item:
+        LOG.warning(
+            "OpenAI response for %s had no 'reasoning' output item at all despite "
+            "reasoning requested -- reasoning_trace will be null.", model,
+        )
     LOG.debug(
         "<- OpenAI (reasoning) response in %.2fs: id=%s output_tokens=%s "
         "reasoning_trace=%s final_text=%r",
@@ -243,15 +260,24 @@ def generate_anthropic(
     this API version).
 
     With `enable_thinking=True`, requests extended thinking via
-    `thinking={"type": "adaptive"}` (the SDK's currently-recommended
-    variant; the older `{"type": "enabled", "budget_tokens": ...}` form is
-    deprecated per this SDK's own runtime warning). Response content
-    blocks of type "thinking" become reasoning_trace, type "text" becomes
-    final_text.
+    `thinking={"type": "adaptive", "display": "summarized"}` (the SDK's
+    currently-recommended variant; the older `{"type": "enabled",
+    "budget_tokens": ...}` form is deprecated per this SDK's own runtime
+    warning). `display: "summarized"` is required to get visible text --
+    confirmed via docs (platform.claude.com/docs/en/build-with-claude/
+    adaptive-thinking): on the newest models, `display` defaults to
+    "omitted", which returns a real "thinking" content block but with its
+    `thinking` text field deliberately blank, not the block itself missing
+    -- matching a real run where reasoning_trace came back null despite
+    thinking being enabled. Also note: at adaptive's default effort, Claude
+    may skip thinking entirely for a trivial prompt, so an empty trace can
+    still legitimately mean "didn't need to think," not just a config
+    issue. Response content blocks of type "thinking" become
+    reasoning_trace, type "text" becomes final_text.
     """
     kwargs: dict = dict(model=model, max_tokens=max_tokens, messages=messages)
     if enable_thinking:
-        kwargs["thinking"] = {"type": "adaptive"}
+        kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
 
     LOG.debug(
         "-> Anthropic request: model=%s max_tokens=%d thinking=%s n_messages=%d last_msg=%r",
