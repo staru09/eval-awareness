@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verbalized eval-awareness probing for Qwen3-8B (plan.md step 4).
 
-For each transcript (from run_inference.py's reasoning_traces.jsonl) and
+For each transcript (from run_inference.py's reasoning_traces.json) and
 each probe question (probe_questions.yaml), appends the probe as a
 follow-up turn after the model's own [user, assistant] exchange and asks
 Qwen3-8B to judge whether the interaction above was an evaluation.
@@ -18,7 +18,7 @@ Outputs:
 
 Usage:
     python verbalize_probe.py \
-      --reasoning-traces ../output/reasoning_traces.jsonl \
+      --reasoning-traces ../output/reasoning_traces.json \
       --probe-questions probe_questions.yaml \
       --out-csv ../output/verbalized_responses.csv \
       --out-json ../output/results/verbalized_auroc.json
@@ -118,9 +118,7 @@ def main() -> None:
 
     import torch
 
-    transcripts = [
-        json.loads(line) for line in args.reasoning_traces.read_text(encoding="utf-8").splitlines() if line.strip()
-    ]
+    transcripts = json.loads(args.reasoning_traces.read_text(encoding="utf-8"))
     probe_questions = yaml.safe_load(args.probe_questions.read_text(encoding="utf-8"))
 
     spec = ModelSpec(hf_id=args.model_path, chat_template=True, enable_thinking=True)

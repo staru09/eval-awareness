@@ -108,72 +108,75 @@ def main() -> None:
         print("Writing model_summary.json ...")
         summary_path.write_text(json.dumps(model_weight_summary(model), indent=2), encoding="utf-8")
 
-    log_path = out_dir / "reasoning_traces.jsonl"
+    log_path = out_dir / "reasoning_traces.json"
     n_layers = model.config.num_hidden_layers
     d_model = model.config.hidden_size
 
-    with open(log_path, "w", encoding="utf-8") as log_f:
-        for row in dataset:
-            t0 = time.time()
-            prompt_text = apply_chat_template(tok, row["text"], spec)
-            inputs = tok(prompt_text, return_tensors="pt", add_special_tokens=False).to(model.device)
+    entries: list[dict] = []
+    for row in dataset:
+        t0 = time.time()
+        prompt_text = apply_chat_template(tok, row["text"], spec)
+        inputs = tok(prompt_text, return_tensors="pt", add_special_tokens=False).to(model.device)
 
+        with torch.no_grad():
+            gen_out = model.generate(
+                **inputs,
+                max_new_tokens=args.max_new_tokens,
+                do_sample=args.temperature > 0,
+                temperature=max(args.temperature, 1e-5),
+                top_p=args.top_p,
+                pad_token_id=tok.pad_token_id,
+            )
+        gen_ids = gen_out[0, inputs["input_ids"].shape[1]:]
+        generated_text = tok.decode(gen_ids, skip_special_tokens=True)
+        reasoning_trace, final_answer = split_reasoning(generated_text)
+
+        entry = {
+            "id": row["id"],
+            "prompt_id": row["prompt_id"],
+            "source": row["source"],
+            "category": row["category"],
+            "ground_truth_label": row["label"],
+            "prompt_text": row["text"],
+            "templated_prompt": prompt_text,
+            "generated_text": generated_text,
+            "reasoning_trace": reasoning_trace,
+            "final_answer": final_answer,
+            "n_prompt_tokens": int(inputs["input_ids"].shape[1]),
+            "n_generated_tokens": int(gen_ids.shape[0]),
+            "generation_config": {
+                "max_new_tokens": args.max_new_tokens,
+                "temperature": args.temperature,
+                "top_p": args.top_p,
+                "enable_thinking": args.enable_thinking,
+            },
+            "model": args.model_path,
+            "elapsed_s": round(time.time() - t0, 2),
+        }
+        entries.append(entry)
+        # Rewrite the full array after each transcript (cheap at this
+        # dataset size) so a partial run still leaves valid JSON behind if
+        # interrupted, rather than only the final entry being lost.
+        log_path.write_text(json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8")
+
+        if not args.no_hidden_states:
+            full_ids = gen_out  # [1, prompt_len + gen_len]
+            attn_mask = torch.ones_like(full_ids)
             with torch.no_grad():
-                gen_out = model.generate(
-                    **inputs,
-                    max_new_tokens=args.max_new_tokens,
-                    do_sample=args.temperature > 0,
-                    temperature=max(args.temperature, 1e-5),
-                    top_p=args.top_p,
-                    pad_token_id=tok.pad_token_id,
-                )
-            gen_ids = gen_out[0, inputs["input_ids"].shape[1]:]
-            generated_text = tok.decode(gen_ids, skip_special_tokens=True)
-            reasoning_trace, final_answer = split_reasoning(generated_text)
+                fwd_out = model(full_ids, attention_mask=attn_mask, output_hidden_states=True)
+            last_h, mean_h = pool_hidden_states(fwd_out.hidden_states, attn_mask)
+            np.savez(
+                act_dir / f"{row['id']}.npz",
+                last_token=last_h.astype(np.float32),  # [n_layers, d_model]
+                mean_token=mean_h.astype(np.float32),  # [n_layers, d_model]
+                label=row["label"],
+                prompt_id=row["prompt_id"],
+                source=row["source"],
+                n_layers=n_layers,
+                d_model=d_model,
+            )
 
-            entry = {
-                "id": row["id"],
-                "prompt_id": row["prompt_id"],
-                "source": row["source"],
-                "category": row["category"],
-                "ground_truth_label": row["label"],
-                "prompt_text": row["text"],
-                "templated_prompt": prompt_text,
-                "generated_text": generated_text,
-                "reasoning_trace": reasoning_trace,
-                "final_answer": final_answer,
-                "n_prompt_tokens": int(inputs["input_ids"].shape[1]),
-                "n_generated_tokens": int(gen_ids.shape[0]),
-                "generation_config": {
-                    "max_new_tokens": args.max_new_tokens,
-                    "temperature": args.temperature,
-                    "top_p": args.top_p,
-                    "enable_thinking": args.enable_thinking,
-                },
-                "model": args.model_path,
-                "elapsed_s": round(time.time() - t0, 2),
-            }
-            log_f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-            log_f.flush()
-
-            if not args.no_hidden_states:
-                full_ids = gen_out  # [1, prompt_len + gen_len]
-                attn_mask = torch.ones_like(full_ids)
-                with torch.no_grad():
-                    fwd_out = model(full_ids, attention_mask=attn_mask, output_hidden_states=True)
-                last_h, mean_h = pool_hidden_states(fwd_out.hidden_states, attn_mask)
-                np.savez(
-                    act_dir / f"{row['id']}.npz",
-                    last_token=last_h.astype(np.float32),  # [n_layers, d_model]
-                    mean_token=mean_h.astype(np.float32),  # [n_layers, d_model]
-                    label=row["label"],
-                    prompt_id=row["prompt_id"],
-                    source=row["source"],
-                    n_layers=n_layers,
-                    d_model=d_model,
-                )
-
-            print(f"[{row['id']}] {entry['n_generated_tokens']} tokens in {entry['elapsed_s']}s")
+        print(f"[{row['id']}] {entry['n_generated_tokens']} tokens in {entry['elapsed_s']}s")
 
     print(f"Wrote {len(dataset)} entries to {log_path}")
     if not args.no_hidden_states:

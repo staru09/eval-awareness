@@ -81,7 +81,7 @@ uv run python run_inference.py --limit 2 --no-hidden-states
 covers generation + verbalized probing only (no internal linear-probe
 steps 1-3, which are Qwen3-8B/HF-only). It reuses
 `probes/verbalize_probe.py`'s exact label-parsing logic and
-`probes/probe_questions.yaml`, and writes the same `reasoning_traces.jsonl`
+`probes/probe_questions.yaml`, and writes the same `reasoning_traces.json`
 schema as `run_inference.py` (so `judges/gpt_judge.py` works unmodified on
 either), plus `verbalized_responses.csv` and `results/verbalized_auroc.json`
 — all under `output/api/<provider>__<model_slug>/` by default.
@@ -145,7 +145,7 @@ Flags: `--models` (required, `provider:model` pairs), `--dataset`,
 
 Outputs:
 - `output/logs/<provider>__<model>__<timestamp>.log` — full stdout/stderr per model run.
-- `output/api/<provider>__<model>/` — per-model `reasoning_traces.jsonl`, `verbalized_responses.csv`, `results/verbalized_auroc.json` (same as running `run_inference_api.py` directly).
+- `output/api/<provider>__<model>/` — per-model `reasoning_traces.json`, `verbalized_responses.csv`, `results/verbalized_auroc.json` (same as running `run_inference_api.py` directly).
 - `output/api/Benchmark-<model-slug>-<timestamp>.json` + `.md` — cross-model comparison table for that invocation (ensemble AUROC, per-probe AUROC/accuracy/parse-failures, elapsed time), analogous to `EXPERIMENT_SUMMARY.md`'s six-model table. Every invocation gets its own timestamped pair — past runs are never overwritten, so you can review history across runs. `<model-slug>` encodes the `--models` you passed (e.g. `openai-gpt-4o_anthropic-claude-sonnet-4-6`); override the path with `--summary-json`/`--summary-md` if you want a fixed name instead.
 
 Exits non-zero if any model run failed, so it's CI/script-friendly.
@@ -171,7 +171,7 @@ common cues cited, per-transcript detail).
 ```bash
 cd judges
 uv run python gpt_judge.py \
-  --reasoning-traces ../output/reasoning_traces.jsonl \
+  --reasoning-traces ../output/reasoning_traces.json \
   --verbalized-csv ../output/verbalized_responses.csv \
   --model gpt-4o \
   --out-jsonl ../output/gpt_judge_analysis.jsonl \

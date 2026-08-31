@@ -7,7 +7,7 @@ This is a diagnostic/qualitative complement to the quantitative pipeline
 (plan.md steps 1-5) — it doesn't feed into the AUROC numbers, it explains
 them. Reads:
 
-  ../output/reasoning_traces.jsonl    (run_inference.py: prompt + <think> trace)
+  ../output/reasoning_traces.json     (run_inference.py: prompt + <think> trace)
   ../output/verbalized_responses.csv  (verbalize_probe.py: per-probe eval_signal)
 
 For each transcript, an external GPT model reads the original prompt,
@@ -32,7 +32,7 @@ other dependency on this repo's HF inference code.
 
 Usage:
     python gpt_judge.py \
-      --reasoning-traces ../output/reasoning_traces.jsonl \
+      --reasoning-traces ../output/reasoning_traces.json \
       --verbalized-csv ../output/verbalized_responses.csv \
       --model gpt-4o \
       --out-jsonl ../output/gpt_judge_analysis.jsonl \
@@ -170,9 +170,7 @@ def main() -> None:
 
     client = OpenAI()
 
-    transcripts = [
-        json.loads(line) for line in args.reasoning_traces.read_text(encoding="utf-8").splitlines() if line.strip()
-    ]
+    transcripts = json.loads(args.reasoning_traces.read_text(encoding="utf-8"))
     if args.limit:
         transcripts = transcripts[: args.limit]
     verbalized_by_tid = load_verbalized_by_transcript(args.verbalized_csv)

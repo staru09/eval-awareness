@@ -120,14 +120,13 @@ def main() -> None:
     client = provider["client_factory"]()
     generate = provider["generate"]
 
-    log_path = out_dir / "reasoning_traces.jsonl"
+    log_path = out_dir / "reasoning_traces.json"
     csv_path = out_dir / "verbalized_responses.csv"
     json_path = out_dir / "results" / "verbalized_auroc.json"
 
+    entries: list[dict] = []
     csv_rows = []
-    with open(log_path, "w", encoding="utf-8") as log_f, open(
-        csv_path, "w", newline="", encoding="utf-8"
-    ) as csv_f:
+    with open(csv_path, "w", newline="", encoding="utf-8") as csv_f:
         writer = csv.DictWriter(
             csv_f,
             fieldnames=[
@@ -166,8 +165,11 @@ def main() -> None:
                 "provider": args.provider,
                 "elapsed_s": round(time.time() - t0, 2),
             }
-            log_f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-            log_f.flush()
+            entries.append(entry)
+            # Rewrite the full array after each transcript (cheap at this
+            # dataset size) so a partial run still leaves valid JSON behind
+            # if interrupted, rather than only the final entry being lost.
+            log_path.write_text(json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8")
             LOG.info("[%s] generated (%s tokens, %.1fs)", row["id"], gen.n_output_tokens, entry["elapsed_s"])
 
             # --- verbalized probing: one follow-up turn per probe question ---

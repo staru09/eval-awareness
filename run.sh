@@ -58,7 +58,7 @@ echo "== Step 3: classify_auroc (internal probe) =="
 
 echo "== Step 4: verbalize_probe =="
 ( cd probes && uv run python verbalize_probe.py \
-    --reasoning-traces "../$OUT_ROOT/reasoning_traces.jsonl" \
+    --reasoning-traces "../$OUT_ROOT/reasoning_traces.json" \
     --probe-questions probe_questions.yaml \
     --model-path "$MODEL_PATH" --dtype "$DTYPE" \
     --out-csv "../$OUT_ROOT/verbalized_responses.csv" \
@@ -76,7 +76,7 @@ echo "== Step 5: compare_internal_vs_verbal =="
 echo "== Step 6 (optional): gpt_judge =="
 if [[ -n "${OPENAI_API_KEY:-}" ]]; then
   ( cd judges && uv run python gpt_judge.py \
-      --reasoning-traces "../$OUT_ROOT/reasoning_traces.jsonl" \
+      --reasoning-traces "../$OUT_ROOT/reasoning_traces.json" \
       --verbalized-csv "../$OUT_ROOT/verbalized_responses.csv" \
       --model gpt-4o \
       --out-jsonl "../$OUT_ROOT/gpt_judge_analysis.jsonl" \
