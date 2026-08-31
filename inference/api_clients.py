@@ -85,15 +85,22 @@ def generate_openai(
     temperature: float = 0.7,
     enable_thinking: bool = False,
 ) -> GenResult:
-    """Generate via the Chat Completions API.
+    """Generate a response, optionally with a captured reasoning trace.
 
-    `enable_thinking=True` is a best-effort request only: most OpenAI
-    models don't expose a separate reasoning trace over this API (the
-    Responses API's `reasoning` output items would be needed for that, and
-    their shape varies by model generation) — this adapter still checks for
-    a `reasoning_content` field on the returned message and uses it if
-    present, else reasoning_trace stays None.
+    `enable_thinking=False` (default): plain Chat Completions call. No
+    OpenAI model exposes a reasoning trace over this API regardless of
+    model, so `reasoning_trace` is always None here.
+
+    `enable_thinking=True`: routes to `_generate_openai_reasoning`, which
+    uses the Responses API with `reasoning.summary` requested. This only
+    returns a non-empty trace for an actual reasoning-capable model (o1,
+    o3, o3-mini, gpt-5-thinking, ...) — passing a non-reasoning model like
+    gpt-4o with --enable-thinking will error or simply come back with no
+    reasoning trace, since the `reasoning` param isn't valid for it.
     """
+    if enable_thinking:
+        return _generate_openai_reasoning(client, model, messages, max_tokens=max_tokens)
+
     LOG.debug(
         "-> OpenAI request: model=%s max_tokens=%d temperature=%.2f n_messages=%d last_msg=%r",
         model, max_tokens, temperature, len(messages), _preview(messages[-1]["content"]),
@@ -115,6 +122,54 @@ def generate_openai(
         "reasoning_trace=%s final_text=%r",
         elapsed, getattr(resp, "id", None), getattr(choice, "finish_reason", None),
         n_tokens, "present" if reasoning_trace else "none", _preview(final_text),
+    )
+    return GenResult(reasoning_trace=reasoning_trace, final_text=final_text, n_output_tokens=n_tokens)
+
+
+def _generate_openai_reasoning(client, model: str, messages: list[dict], *, max_tokens: int) -> GenResult:
+    """Generate via the Responses API with a reasoning summary requested.
+
+    Reasoning models (o1/o3/o3-mini/gpt-5-thinking/...) generally reject a
+    `temperature` override, so none is sent here. `reasoning.summary="auto"`
+    asks the API to include a natural-language summary of the model's
+    reasoning as a separate "reasoning" output item; plain output text
+    comes back as "message" output items (or via the SDK's `output_text`
+    convenience property, used as a fallback).
+    """
+    LOG.debug(
+        "-> OpenAI (reasoning) request: model=%s max_output_tokens=%d n_messages=%d last_msg=%r",
+        model, max_tokens, len(messages), _preview(messages[-1]["content"]),
+    )
+    t0 = time.time()
+    resp = client.responses.create(
+        model=model,
+        input=messages,
+        reasoning={"summary": "auto"},
+        max_output_tokens=max_tokens,
+    )
+    elapsed = time.time() - t0
+
+    reasoning_parts, text_parts = [], []
+    for item in getattr(resp, "output", None) or []:
+        item_type = getattr(item, "type", None)
+        if item_type == "reasoning":
+            for s in getattr(item, "summary", None) or []:
+                text = getattr(s, "text", None) or getattr(s, "content", None)
+                if text:
+                    reasoning_parts.append(text)
+        elif item_type == "message":
+            for c in getattr(item, "content", None) or []:
+                if getattr(c, "type", None) == "output_text":
+                    text_parts.append(c.text)
+
+    reasoning_trace = "\n".join(reasoning_parts).strip() or None
+    final_text = "\n".join(text_parts).strip() or (getattr(resp, "output_text", None) or "")
+    n_tokens = getattr(getattr(resp, "usage", None), "output_tokens", None)
+    LOG.debug(
+        "<- OpenAI (reasoning) response in %.2fs: id=%s output_tokens=%s "
+        "reasoning_trace=%s final_text=%r",
+        elapsed, getattr(resp, "id", None), n_tokens,
+        "present" if reasoning_trace else "none", _preview(final_text),
     )
     return GenResult(reasoning_trace=reasoning_trace, final_text=final_text, n_output_tokens=n_tokens)
 

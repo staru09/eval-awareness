@@ -97,10 +97,21 @@ uv run python run_inference_api.py --provider anthropic --model claude-sonnet-4-
 ```
 
 `--enable-thinking` requests Anthropic extended thinking (its `thinking`
-content blocks become `reasoning_trace`); for OpenAI it's best-effort only
-— most models expose no separate reasoning trace over the Chat Completions
-API, so `reasoning_trace` will be `null` unless the model/SDK happens to
-return a `reasoning_content` field.
+content blocks become `reasoning_trace`). For OpenAI it routes to the
+**Responses API** with `reasoning.summary="auto"` requested — this only
+returns a real `reasoning_trace` for an actual reasoning-capable model
+(`o1`, `o3`, `o3-mini`, `gpt-5-thinking`, ...); `gpt-4o` and other
+non-reasoning models don't accept the `reasoning` param over this API, so
+pass a reasoning model when you use `--enable-thinking` with `--provider
+openai`, e.g.:
+
+```bash
+uv run python run_inference_api.py --provider openai --model o3-mini --enable-thinking
+```
+
+Without `--enable-thinking`, OpenAI always goes through plain Chat
+Completions and `reasoning_trace` stays `null` regardless of model (as you
+saw with `gpt-4o` — that's expected, not a bug).
 
 ### Multi-model runner: `run_benchmark.py`
 

@@ -31,6 +31,7 @@ workspace's convention (`uv run python run_inference_api.py ...`).
 Usage:
     python run_inference_api.py --provider openai --model gpt-4o
     python run_inference_api.py --provider anthropic --model claude-sonnet-4-6 --enable-thinking
+    python run_inference_api.py --provider openai --model o3-mini --enable-thinking  # reasoning model required
     python run_inference_api.py --provider openai --model gpt-4o --limit 2   # smoke test
 """
 from __future__ import annotations
@@ -73,7 +74,13 @@ def main() -> None:
     ap.add_argument("--out-dir", default=None, type=Path, help="default: ../output/api/<provider>__<model_slug>/")
     ap.add_argument("--max-tokens", type=int, default=2048)
     ap.add_argument("--temperature", type=float, default=0.7)
-    ap.add_argument("--enable-thinking", action="store_true", help="Anthropic extended thinking / best-effort OpenAI reasoning trace")
+    ap.add_argument(
+        "--enable-thinking", action="store_true",
+        help="Anthropic: extended thinking. OpenAI: routes to the Responses API with a "
+             "reasoning summary requested -- --model must be a reasoning-capable model "
+             "(o1, o3, o3-mini, gpt-5-thinking, ...); a non-reasoning model like gpt-4o "
+             "will error or return no reasoning trace.",
+    )
     ap.add_argument("--limit", type=int, default=None, help="only run the first N transcripts (smoke test)")
     ap.add_argument(
         "--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"],
