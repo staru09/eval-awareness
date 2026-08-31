@@ -32,8 +32,9 @@ eval-awareness/
 ├── inference/
 │   ├── model_utils.py             # HF load/chat-template helpers
 │   ├── run_inference.py           # local Qwen3-8B: generation + activation capture
-│   ├── api_clients.py             # OpenAI/Anthropic provider adapters
-│   └── run_inference_api.py       # OpenAI/Anthropic: generation + verbalized probing
+│   ├── api_clients.py             # OpenAI/Anthropic provider adapters (reads .env)
+│   ├── run_inference_api.py       # single OpenAI/Anthropic model: generation + verbalized probing
+│   └── run_benchmark.py           # multi-model runner: logs + aggregated summary
 ├── probes/
 │   ├── compute_probe.py           # step 1: 16-pair direction + random controls
 │   ├── score_activations.py       # step 2: project saved activations onto probe
@@ -100,6 +101,43 @@ content blocks become `reasoning_trace`); for OpenAI it's best-effort only
 — most models expose no separate reasoning trace over the Chat Completions
 API, so `reasoning_trace` will be `null` unless the model/SDK happens to
 return a `reasoning_content` field.
+
+### Multi-model runner: `run_benchmark.py`
+
+Runs several OpenAI/Anthropic models in one command (one subprocess per
+model, via `run_inference_api.py`, so one model's API error doesn't take
+down the rest), tees each model's output to both the console and a
+timestamped per-model log file, and writes an aggregated comparison
+summary once everything finishes.
+
+```bash
+cd inference
+uv run python run_benchmark.py \
+  --models openai:gpt-4o anthropic:claude-sonnet-4-6 \
+  --limit 5   # smoke test: first 5 transcripts only
+
+# Full run, extended thinking on the Anthropic model only:
+uv run python run_benchmark.py \
+  --models openai:gpt-4o openai:gpt-4o-mini anthropic:claude-sonnet-4-6 \
+  --enable-thinking anthropic:claude-sonnet-4-6
+
+# Re-run only models that don't have results yet (e.g. after a partial failure):
+uv run python run_benchmark.py --models openai:gpt-4o anthropic:claude-sonnet-4-6 --resume
+```
+
+Flags: `--models` (required, `provider:model` pairs), `--dataset`,
+`--probe-questions`, `--out-root` (default `output/api/`), `--log-dir`
+(default `output/logs/`), `--max-tokens`, `--temperature`,
+`--enable-thinking [spec ...]` (no args = enable for every model in
+`--models`; with args, only for those specs), `--limit`, `--resume`,
+`--summary-json`/`--summary-md` (override output paths).
+
+Outputs:
+- `output/logs/<provider>__<model>__<timestamp>.log` — full stdout/stderr per model run.
+- `output/api/<provider>__<model>/` — per-model `reasoning_traces.jsonl`, `verbalized_responses.csv`, `results/verbalized_auroc.json` (same as running `run_inference_api.py` directly).
+- `output/api/benchmark_summary.json` + `output/api/BENCHMARK_SUMMARY.md` — cross-model comparison table (ensemble AUROC, per-probe AUROC/accuracy/parse-failures, elapsed time), analogous to `EXPERIMENT_SUMMARY.md`'s six-model table.
+
+Exits non-zero if any model run failed, so it's CI/script-friendly.
 
 ## GPT judge (step 6, optional, qualitative)
 

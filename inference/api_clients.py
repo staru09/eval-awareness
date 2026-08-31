@@ -12,7 +12,39 @@ uniformly.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from pathlib import Path
+
+_ENV_LOADED = False
+
+
+def _ensure_env_loaded() -> None:
+    """Load ../.env once (if python-dotenv is installed), so OPENAI_API_KEY /
+    ANTHROPIC_API_KEY are picked up regardless of the caller's cwd. Never
+    overrides an already-exported env var.
+    """
+    global _ENV_LOADED
+    if _ENV_LOADED:
+        return
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
+    except ImportError:
+        pass
+    _ENV_LOADED = True
+
+
+def _require_env(var_name: str, provider: str) -> str:
+    _ensure_env_loaded()
+    value = os.environ.get(var_name)
+    if not value:
+        raise SystemExit(
+            f"{var_name} is not set. Add it to eval-awareness/.env or export it "
+            f"before running the {provider} benchmark."
+        )
+    return value
 
 
 @dataclass
@@ -29,7 +61,8 @@ class GenResult:
 def openai_client():
     from openai import OpenAI
 
-    return OpenAI()
+    api_key = _require_env("OPENAI_API_KEY", "OpenAI")
+    return OpenAI(api_key=api_key)
 
 
 def generate_openai(
@@ -70,7 +103,8 @@ def generate_openai(
 def anthropic_client():
     from anthropic import Anthropic
 
-    return Anthropic()
+    api_key = _require_env("ANTHROPIC_API_KEY", "Anthropic")
+    return Anthropic(api_key=api_key)
 
 
 def generate_anthropic(
