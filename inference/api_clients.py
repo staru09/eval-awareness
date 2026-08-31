@@ -76,6 +76,20 @@ def openai_client():
     return OpenAI(api_key=api_key)
 
 
+def _is_openai_reasoning_model(model: str) -> bool:
+    """Whether `model` is a reasoning-capable OpenAI model: the gpt-5.x
+    family (gpt-5.4, gpt-5.5, gpt-5.6, gpt-5.6-sol/-terra/-luna, ...) and
+    the older o-series (o1, o3, o4-mini, ...). These reject a non-default
+    `temperature` over the Chat Completions API entirely -- confirmed via a
+    real run against gpt-5.6-terra: "Unsupported value: 'temperature' does
+    not support 0.7 with this model. Only the default (1) value is
+    supported." -- and this holds even when thinking/reasoning isn't
+    actively requested for that particular call (e.g. a plain follow-up
+    turn), so this check is name-based, not tied to --enable-thinking.
+    """
+    return model.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
 def generate_openai(
     client,
     model: str,
@@ -107,20 +121,25 @@ def generate_openai(
             client, model, messages, max_tokens=max_tokens, reasoning_effort=reasoning_effort,
         )
 
-    LOG.debug(
-        "-> OpenAI request: model=%s max_tokens=%d temperature=%.2f n_messages=%d last_msg=%r",
-        model, max_tokens, temperature, len(messages), _preview(messages[-1]["content"]),
-    )
-    t0 = time.time()
-    resp = client.chat.completions.create(
+    is_reasoning = _is_openai_reasoning_model(model)
+    kwargs: dict = dict(
         model=model,
         messages=messages,
         # Newer models (e.g. gpt-5.6-terra) reject `max_tokens` over Chat
         # Completions with a 400 ("Unsupported parameter") -- confirmed via
         # a real run -- and require `max_completion_tokens` instead.
         max_completion_tokens=max_tokens,
-        temperature=temperature,
     )
+    if not is_reasoning:
+        kwargs["temperature"] = temperature
+
+    LOG.debug(
+        "-> OpenAI request: model=%s max_tokens=%d temperature=%s n_messages=%d last_msg=%r",
+        model, max_tokens, temperature if not is_reasoning else "(omitted, reasoning model)",
+        len(messages), _preview(messages[-1]["content"]),
+    )
+    t0 = time.time()
+    resp = client.chat.completions.create(**kwargs)
     elapsed = time.time() - t0
     choice = resp.choices[0]
     final_text = choice.message.content or ""
