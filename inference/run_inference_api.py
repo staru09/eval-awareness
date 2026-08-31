@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Run the eval-awareness benchmark on an OpenAI or Anthropic API model,
-as a drop-in alternative to run_inference.py (local Qwen3-8B via HF).
+"""Run the eval-awareness benchmark on an OpenAI, Anthropic, or self-hosted
+vLLM model, as a drop-in alternative to run_inference.py (local Qwen3-8B
+via HF in-process).
 
 API models expose no hidden states, so this script covers the two stages
 that don't require local weight access:
@@ -8,8 +9,9 @@ that don't require local weight access:
   1. Generation over the mixed eval/deploy dataset (data/dataset.json),
      capturing a reasoning trace when the provider/model exposes one
      (Anthropic extended thinking; OpenAI reasoning-capable models via
-     the Responses API) — same JSON schema as run_inference.py's
-     reasoning_traces.json, so gpt_judge.py works unmodified on either.
+     the Responses API; vLLM/open-weight models via inline <think> tags)
+     — same JSON schema as run_inference.py's reasoning_traces.json, so
+     gpt_judge.py works unmodified on any of the three.
   2. Verbalized probing: for each transcript, appends each of
      probes/probe_questions.yaml's 5 phrasings as a follow-up turn and
      asks the model whether the interaction above was an evaluation,
@@ -25,18 +27,28 @@ Outputs, under --out-dir (default ../output/api/<provider>__<model_slug>/):
   results/verbalized_auroc.json
 
 Requires OPENAI_API_KEY and/or ANTHROPIC_API_KEY (see ../.env, loaded via
-python-dotenv if present). Uses uv for package management, per this
-workspace's convention (`uv run python run_inference_api.py ...`).
+python-dotenv if present). --provider vllm needs no API key by default
+(vLLM ignores it unless you've configured server-side auth, in which case
+set VLLM_API_KEY) but does need --base-url pointed at your server, e.g. a
+vLLM instance on a cloud GPU VM exposing an OpenAI-compatible endpoint
+(`vllm serve <model> --host 0.0.0.0 --port 8000`) -- see plan.md /
+../../eval-aware-oss's precedent for this pattern. Uses uv for package
+management, per this workspace's convention
+(`uv run python run_inference_api.py ...`).
 
 Thinking is ON by default. OpenAI reasoning models are the gpt-5.x family
 (gpt-5.6, gpt-5.6-sol/-terra/-luna, gpt-5.5, gpt-5.4, ...) -- gpt-4o and
-other non-reasoning models need --no-thinking.
+other non-reasoning models need --no-thinking. For vLLM, thinking toggles
+the served model's own chat-template thinking mode (e.g. Qwen3); pass
+--no-thinking for a model/checkpoint with no thinking mode at all.
 
 Usage:
     python run_inference_api.py --provider anthropic --model claude-sonnet-4-6
     python run_inference_api.py --provider openai --model gpt-5.6
     python run_inference_api.py --provider openai --model gpt-5.6 --reasoning-effort high
     python run_inference_api.py --provider openai --model gpt-4o --no-thinking
+    python run_inference_api.py --provider vllm --model Qwen/Qwen3-8B \
+      --base-url http://<your-vm-ip>:8000/v1
     python run_inference_api.py --provider openai --model gpt-5.6 --limit 2   # smoke test
 """
 from __future__ import annotations
@@ -56,7 +68,7 @@ from sklearn.metrics import roc_auc_score
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "probes"))
-from api_clients import PROVIDERS  # noqa: E402
+from api_clients import PROVIDERS, vllm_client  # noqa: E402
 from verbalize_probe import PARSE_FAILURE_VALUE, resolve_answer  # noqa: E402
 
 LOG = logging.getLogger("run_inference_api")
@@ -73,7 +85,12 @@ def slugify(model: str) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--provider", required=True, choices=sorted(PROVIDERS))
-    ap.add_argument("--model", required=True, help="e.g. gpt-4o, claude-sonnet-4-6")
+    ap.add_argument("--model", required=True, help="e.g. gpt-4o, claude-sonnet-4-6, Qwen/Qwen3-8B")
+    ap.add_argument(
+        "--base-url", default=None,
+        help="Required for --provider vllm: your vLLM server's OpenAI-compatible endpoint "
+             "(e.g. http://<vm-ip>:8000/v1). Ignored for openai/anthropic.",
+    )
     ap.add_argument("--dataset", default=str(DEFAULT_DATASET), type=Path)
     ap.add_argument("--probe-questions", default=str(DEFAULT_PROBE_QUESTIONS), type=Path)
     ap.add_argument("--out-dir", default=None, type=Path, help="default: ../output/api/<provider>__<model_slug>/")
@@ -136,7 +153,12 @@ def main() -> None:
     probe_questions = yaml.safe_load(args.probe_questions.read_text(encoding="utf-8"))
 
     provider = PROVIDERS[args.provider]
-    client = provider["client_factory"]()
+    if args.provider == "vllm":
+        if not args.base_url:
+            raise SystemExit("--base-url is required for --provider vllm (e.g. http://<vm-ip>:8000/v1)")
+        client = vllm_client(args.base_url)
+    else:
+        client = provider["client_factory"]()
     generate = provider["generate"]
 
     log_path = out_dir / "reasoning_traces.json"

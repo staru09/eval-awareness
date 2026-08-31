@@ -81,8 +81,8 @@ def parse_model_spec(spec: str) -> tuple[str, str]:
     if ":" not in spec:
         raise SystemExit(f"Invalid --models entry {spec!r}, expected 'provider:model' (e.g. openai:gpt-4o)")
     provider, model = spec.split(":", 1)
-    if provider not in ("openai", "anthropic"):
-        raise SystemExit(f"Unknown provider {provider!r} in {spec!r}; expected 'openai' or 'anthropic'")
+    if provider not in ("openai", "anthropic", "vllm"):
+        raise SystemExit(f"Unknown provider {provider!r} in {spec!r}; expected 'openai', 'anthropic', or 'vllm'")
     return provider, model
 
 
@@ -99,6 +99,7 @@ def run_one_model(
     enable_thinking: bool,
     reasoning_effort: str,
     limit: int | None,
+    base_url: str | None = None,
 ) -> dict:
     """Runs run_inference_api.py for one model as a subprocess, tees output
     to console + a timestamped log file. Returns a status dict.
@@ -119,6 +120,10 @@ def run_one_model(
         "--temperature", str(temperature),
         "--reasoning-effort", reasoning_effort,
     ]
+    if provider == "vllm":
+        if not base_url:
+            raise SystemExit(f"--vllm-base-url is required to run vllm:{model}")
+        cmd += ["--base-url", base_url]
     # run_inference_api.py's own --enable-thinking now defaults to True, so
     # explicitly pass --no-thinking when this model should have it disabled
     # (its subprocess default alone would otherwise leave thinking on).
@@ -251,6 +256,12 @@ def main() -> None:
              "or list specific 'provider:model' specs to disable only those (e.g. a "
              "non-reasoning OpenAI model like gpt-4o, which errors if thinking stays on).",
     )
+    ap.add_argument(
+        "--vllm-base-url", default=None,
+        help="Required if any --models entry uses 'vllm:<model>' -- your vLLM server's "
+             "OpenAI-compatible endpoint (e.g. http://<vm-ip>:8000/v1). One server/URL for "
+             "all vllm: specs in this run; run separate invocations for multiple servers.",
+    )
     ap.add_argument("--limit", type=int, default=None, help="only run the first N transcripts per model (smoke test)")
     ap.add_argument("--resume", action="store_true", help="skip models that already have results/verbalized_auroc.json")
     ap.add_argument(
@@ -300,6 +311,10 @@ def main() -> None:
             continue
         to_run.append((spec_str, provider, model))
 
+    for spec_str, provider, model in to_run:
+        if provider == "vllm" and not args.vllm_base_url:
+            raise SystemExit(f"--vllm-base-url is required to run vllm:{model}")
+
     run_statuses = []
     if to_run:
         max_workers = args.max_parallel or len(to_run)
@@ -312,6 +327,7 @@ def main() -> None:
                     max_tokens=args.max_tokens, temperature=args.temperature,
                     enable_thinking=spec_str not in disabled_set, reasoning_effort=args.reasoning_effort,
                     limit=args.limit,
+                    base_url=args.vllm_base_url if provider == "vllm" else None,
                 ): (provider, model)
                 for spec_str, provider, model in to_run
             }

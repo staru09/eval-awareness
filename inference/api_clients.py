@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -306,7 +307,90 @@ def generate_anthropic(
     return GenResult(reasoning_trace=reasoning_trace, final_text=final_text, n_output_tokens=n_tokens)
 
 
+# ---------------------------------------------------------------------------
+# vLLM (self-hosted, OpenAI-compatible /v1/chat/completions)
+# ---------------------------------------------------------------------------
+
+_THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+
+
+def vllm_client(base_url: str):
+    """vLLM's OpenAI-compatible server speaks the same wire protocol as the
+    openai package's client, just pointed at a different base_url -- e.g. a
+    vLLM instance you're hosting on a cloud GPU VM, per plan.md/README's
+    "eval-aware-oss" precedent (vLLM behind an OpenAI-compatible endpoint).
+    No real API key needed; vLLM ignores it unless you've configured
+    --api-key server-side, in which case set VLLM_API_KEY.
+    """
+    from openai import OpenAI
+
+    api_key = os.environ.get("VLLM_API_KEY", "EMPTY")
+    return OpenAI(base_url=base_url, api_key=api_key)
+
+
+def generate_vllm(
+    client,
+    model: str,
+    messages: list[dict],
+    *,
+    max_tokens: int = 2048,
+    temperature: float = 0.7,
+    enable_thinking: bool = False,
+    reasoning_effort: str = "medium",  # accepted for interface parity, unused
+) -> GenResult:
+    """Generate via a self-hosted vLLM server's OpenAI-compatible chat
+    endpoint. Unlike the real OpenAI API, vLLM serves open-weight models
+    (Qwen3, DeepSeek-R1, ...) that emit their reasoning inline as
+    `<think>...</think>` in the response text rather than as a separate
+    Responses-API output item -- so reasoning capture here works like
+    run_inference.py's local-HF path (regex-split the `<think>` block),
+    not like generate_openai's Responses-API path.
+
+    `enable_thinking` is forwarded as `chat_template_kwargs.enable_thinking`
+    via `extra_body`, matching vLLM's documented mechanism for toggling
+    Qwen3's thinking mode per-request over the OpenAI-compatible API.
+    `reasoning_effort` has no vLLM/open-weight-model equivalent and is
+    ignored. `max_tokens` (not `max_completion_tokens`) is used since vLLM's
+    OpenAI-compatible server implements the older/stable Chat Completions
+    parameter name.
+    """
+    LOG.debug(
+        "-> vLLM request: model=%s max_tokens=%d temperature=%.2f enable_thinking=%s "
+        "n_messages=%d last_msg=%r",
+        model, max_tokens, temperature, enable_thinking, len(messages), _preview(messages[-1]["content"]),
+    )
+    t0 = time.time()
+    resp = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}},
+    )
+    elapsed = time.time() - t0
+    choice = resp.choices[0]
+    raw_text = choice.message.content or ""
+
+    m = _THINK_RE.search(raw_text)
+    if m:
+        reasoning_trace = m.group(1).strip() or None
+        final_text = raw_text[m.end():].strip()
+    else:
+        reasoning_trace = None
+        final_text = raw_text.strip()
+
+    n_tokens = getattr(getattr(resp, "usage", None), "completion_tokens", None)
+    LOG.debug(
+        "<- vLLM response in %.2fs: id=%s finish_reason=%s completion_tokens=%s "
+        "reasoning_trace=%s final_text=%r",
+        elapsed, getattr(resp, "id", None), getattr(choice, "finish_reason", None),
+        n_tokens, "present" if reasoning_trace else "none", _preview(final_text),
+    )
+    return GenResult(reasoning_trace=reasoning_trace, final_text=final_text, n_output_tokens=n_tokens)
+
+
 PROVIDERS = {
     "openai": {"client_factory": openai_client, "generate": generate_openai},
     "anthropic": {"client_factory": anthropic_client, "generate": generate_anthropic},
+    "vllm": {"client_factory": None, "generate": generate_vllm},  # client built with --base-url, see run_inference_api.py
 }

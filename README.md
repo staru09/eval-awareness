@@ -74,21 +74,22 @@ cd inference
 uv run python run_inference.py --limit 2 --no-hidden-states
 ```
 
-## Running the benchmark on OpenAI / Anthropic models
+## Running the benchmark on OpenAI / Anthropic / vLLM models
 
 `inference/run_inference_api.py` is a drop-in alternative to
-`run_inference.py` for API models — they expose no hidden states, so it
-covers generation + verbalized probing only (no internal linear-probe
-steps 1-3, which are Qwen3-8B/HF-only). It reuses
+`run_inference.py` for API (or API-shaped) models — they expose no hidden
+states, so it covers generation + verbalized probing only (no internal
+linear-probe steps 1-3, which are Qwen3-8B/HF-only). It reuses
 `probes/verbalize_probe.py`'s exact label-parsing logic and
 `probes/probe_questions.yaml`, and writes the same `reasoning_traces.json`
 schema as `run_inference.py` (so `judges/gpt_judge.py` works unmodified on
-either), plus `verbalized_responses.csv` and `results/verbalized_auroc.json`
-— all under `output/api/<provider>__<model_slug>/` by default.
+any of the three), plus `verbalized_responses.csv` and
+`results/verbalized_auroc.json` — all under
+`output/api/<provider>__<model_slug>/` by default.
 
 Requires `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY` (loaded from `.env` via
 `python-dotenv` if installed — **never commit `.env`**, it's in
-`.gitignore`).
+`.gitignore`). `--provider vllm` needs no API key by default.
 
 Thinking/reasoning-trace capture is **ON by default**:
 
@@ -117,16 +118,48 @@ uv run python run_inference_api.py --provider openai --model gpt-4o --no-thinkin
 Without thinking, OpenAI goes through plain Chat Completions and
 `reasoning_trace` stays `null` regardless of model.
 
+### Self-hosted vLLM (e.g. a cloud GPU VM)
+
+`--provider vllm` points the same script at any server speaking vLLM's
+OpenAI-compatible endpoint — e.g. host a vLLM instance on a cloud GPU VM
+and run this benchmark against it from your local machine, per
+`eval-aware-oss/plan.md`'s original vLLM-serving precedent:
+
+```bash
+# On the VM:
+vllm serve Qwen/Qwen3-8B --host 0.0.0.0 --port 8000
+
+# Locally:
+cd inference
+uv run python run_inference_api.py \
+  --provider vllm --model Qwen/Qwen3-8B \
+  --base-url http://<vm-ip>:8000/v1
+```
+
+`--base-url` is required for this provider. No real API key is needed
+(vLLM ignores it) unless you've configured `--api-key` server-side, in
+which case set `VLLM_API_KEY` in `.env`. Reasoning capture works
+differently here than for OpenAI/Anthropic: vLLM serves open-weight models
+(Qwen3, DeepSeek-R1, ...) that emit their reasoning inline as
+`<think>...</think>` in the response text (same convention as
+`run_inference.py`'s local-HF path), not via a separate Responses-API
+item — `--enable-thinking`/`--no-thinking` toggles this via vLLM's
+`chat_template_kwargs.enable_thinking` mechanism. `--reasoning-effort` has
+no open-weight-model equivalent and is ignored for this provider.
+
 ### Multi-model runner: `run_benchmark.py`
 
-Runs several OpenAI/Anthropic models in one command (one subprocess per
-model, via `run_inference_api.py`, so one model's API error doesn't take
-down the rest), **concurrently by default** — they're independent API
+Runs several OpenAI/Anthropic/vLLM models in one command (one subprocess
+per model, via `run_inference_api.py`, so one model's API error doesn't
+take down the rest), **concurrently by default** — they're independent API
 calls to different providers/models, so there's no reason to serialize
 them (cap with `--max-parallel N`, or set it to `1` to force sequential
 execution). Tees each model's output to both the console and a timestamped
 per-model log file, and writes an aggregated comparison summary once
-everything finishes.
+everything finishes. Include a `vllm:<model>` spec alongside OpenAI/
+Anthropic ones and pass `--vllm-base-url` (one server/URL per invocation —
+run separately if you have multiple vLLM servers), e.g.
+`--models openai:gpt-5.6 vllm:Qwen/Qwen3-8B --vllm-base-url http://<vm-ip>:8000/v1`.
 
 Thinking is **ON by default for every model**:
 
