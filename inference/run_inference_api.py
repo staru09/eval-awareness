@@ -75,11 +75,17 @@ def main() -> None:
     ap.add_argument("--max-tokens", type=int, default=2048)
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument(
-        "--enable-thinking", action="store_true",
+        "--enable-thinking", dest="enable_thinking", action="store_true", default=True,
         help="Anthropic: extended thinking. OpenAI: routes to the Responses API with a "
              "reasoning summary requested -- --model must be a reasoning-capable model "
              "(o1, o3, o3-mini, gpt-5-thinking, ...); a non-reasoning model like gpt-4o "
-             "will error or return no reasoning trace.",
+             "will error against the Responses API's reasoning param. ON by default.",
+    )
+    ap.add_argument(
+        "--no-thinking", dest="enable_thinking", action="store_false",
+        help="Disable thinking/reasoning-trace capture (plain Chat Completions for OpenAI, "
+             "no `thinking` param for Anthropic). Use this for non-reasoning OpenAI models "
+             "like gpt-4o.",
     )
     ap.add_argument("--limit", type=int, default=None, help="only run the first N transcripts (smoke test)")
     ap.add_argument(

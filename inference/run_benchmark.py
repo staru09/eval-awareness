@@ -11,18 +11,28 @@ on one model doesn't take down the rest) and:
     writes one aggregated comparison table (JSON + Markdown), analogous to
     ../EXPERIMENT_SUMMARY.md's six-model table
 
+Thinking/reasoning-trace capture is ON by default for every model (uses a
+reasoning-capable OpenAI model like o3-mini, not gpt-4o, which errors
+against the Responses API's reasoning param -- see --disable-thinking).
+
 Usage:
+    # Full run, thinking on by default for both models:
+    python run_benchmark.py --models openai:o3-mini anthropic:claude-sonnet-4-6
+
+    # Smoke test, first 5 transcripts only:
+    python run_benchmark.py \
+      --models openai:o3-mini anthropic:claude-sonnet-4-6 --limit 5
+
+    # gpt-4o isn't a reasoning model -- disable thinking for it specifically:
     python run_benchmark.py \
       --models openai:gpt-4o anthropic:claude-sonnet-4-6 \
-      --limit 5
+      --disable-thinking openai:gpt-4o
 
-    # Full run with extended thinking on the Anthropic model:
-    python run_benchmark.py \
-      --models openai:gpt-4o openai:gpt-4o-mini anthropic:claude-sonnet-4-6 \
-      --enable-thinking anthropic:claude-sonnet-4-6
+    # Disable thinking for all models:
+    python run_benchmark.py --models openai:gpt-4o anthropic:claude-sonnet-4-6 --disable-thinking
 
     # Re-run only models whose output is missing/incomplete:
-    python run_benchmark.py --models openai:gpt-4o anthropic:claude-sonnet-4-6 --resume
+    python run_benchmark.py --models openai:o3-mini anthropic:claude-sonnet-4-6 --resume
 """
 from __future__ import annotations
 
@@ -101,8 +111,10 @@ def run_one_model(
         "--max-tokens", str(max_tokens),
         "--temperature", str(temperature),
     ]
-    if enable_thinking:
-        cmd.append("--enable-thinking")
+    # run_inference_api.py's own --enable-thinking now defaults to True, so
+    # explicitly pass --no-thinking when this model should have it disabled
+    # (its subprocess default alone would otherwise leave thinking on).
+    cmd.append("--enable-thinking" if enable_thinking else "--no-thinking")
     if limit:
         cmd += ["--limit", str(limit)]
 
@@ -211,9 +223,11 @@ def main() -> None:
     ap.add_argument("--max-tokens", type=int, default=2048)
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument(
-        "--enable-thinking", nargs="*", default=None,
-        help="Enable extended thinking for these 'provider:model' specs only "
-             "(no args = enable for all models in --models).",
+        "--disable-thinking", nargs="*", default=None,
+        help="Thinking/reasoning-trace capture is ON by default for every model in "
+             "--models. Pass this to disable it -- no args disables for all models, "
+             "or list specific 'provider:model' specs to disable only those (e.g. a "
+             "non-reasoning OpenAI model like gpt-4o, which errors if thinking stays on).",
     )
     ap.add_argument("--limit", type=int, default=None, help="only run the first N transcripts per model (smoke test)")
     ap.add_argument("--resume", action="store_true", help="skip models that already have results/verbalized_auroc.json")
@@ -228,9 +242,11 @@ def main() -> None:
     args = ap.parse_args()
 
     model_specs = [parse_model_spec(m) for m in args.models]
-    thinking_set = None
-    if args.enable_thinking is not None:
-        thinking_set = set(args.enable_thinking) if args.enable_thinking else {m for m in args.models}
+    # Thinking is ON by default for every model; --disable-thinking (no args)
+    # turns it off for all, or for just the specs listed.
+    disabled_set: set[str] = set()
+    if args.disable_thinking is not None:
+        disabled_set = set(args.disable_thinking) if args.disable_thinking else set(args.models)
 
     out_root = Path(args.out_root)
     log_dir = Path(args.log_dir)
@@ -249,7 +265,7 @@ def main() -> None:
         if args.resume and already_has_results(out_root, provider, model):
             print(f"--resume: skipping {provider}:{model} (results already present)")
             continue
-        enable_thinking = thinking_set is not None and spec_str in thinking_set
+        enable_thinking = spec_str not in disabled_set
         status = run_one_model(
             provider, model,
             dataset=Path(args.dataset), probe_questions=Path(args.probe_questions),

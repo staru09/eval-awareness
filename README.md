@@ -90,28 +90,28 @@ Requires `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY` (loaded from `.env` via
 `python-dotenv` if installed — **never commit `.env`**, it's in
 `.gitignore`).
 
+Thinking/reasoning-trace capture is **ON by default**:
+
 ```bash
 cd inference
-uv run python run_inference_api.py --provider openai --model gpt-4o
-uv run python run_inference_api.py --provider anthropic --model claude-sonnet-4-6 --enable-thinking
+uv run python run_inference_api.py --provider openai --model o3-mini
+uv run python run_inference_api.py --provider anthropic --model claude-sonnet-4-6
 ```
 
-`--enable-thinking` requests Anthropic extended thinking (its `thinking`
-content blocks become `reasoning_trace`). For OpenAI it routes to the
-**Responses API** with `reasoning.summary="auto"` requested — this only
-returns a real `reasoning_trace` for an actual reasoning-capable model
-(`o1`, `o3`, `o3-mini`, `gpt-5-thinking`, ...); `gpt-4o` and other
-non-reasoning models don't accept the `reasoning` param over this API, so
-pass a reasoning model when you use `--enable-thinking` with `--provider
-openai`, e.g.:
+For Anthropic this requests extended thinking (its `thinking` content
+blocks become `reasoning_trace`). For OpenAI it routes to the **Responses
+API** with `reasoning.summary="auto"` requested — this only works for an
+actual reasoning-capable model (`o1`, `o3`, `o3-mini`, `gpt-5-thinking`,
+...); a non-reasoning model like `gpt-4o` doesn't accept the `reasoning`
+param over this API and will error, so pass `--no-thinking` when using a
+non-reasoning OpenAI model:
 
 ```bash
-uv run python run_inference_api.py --provider openai --model o3-mini --enable-thinking
+uv run python run_inference_api.py --provider openai --model gpt-4o --no-thinking
 ```
 
-Without `--enable-thinking`, OpenAI always goes through plain Chat
-Completions and `reasoning_trace` stays `null` regardless of model (as you
-saw with `gpt-4o` — that's expected, not a bug).
+Without thinking, OpenAI goes through plain Chat Completions and
+`reasoning_trace` stays `null` regardless of model.
 
 ### Multi-model runner: `run_benchmark.py`
 
@@ -121,27 +121,35 @@ down the rest), tees each model's output to both the console and a
 timestamped per-model log file, and writes an aggregated comparison
 summary once everything finishes.
 
+Thinking is **ON by default for every model**:
+
 ```bash
 cd inference
+uv run python run_benchmark.py --models openai:o3-mini anthropic:claude-sonnet-4-6
+
+# Smoke test: first 5 transcripts only
+uv run python run_benchmark.py \
+  --models openai:o3-mini anthropic:claude-sonnet-4-6 --limit 5
+
+# gpt-4o isn't a reasoning model -- disable thinking for it specifically:
 uv run python run_benchmark.py \
   --models openai:gpt-4o anthropic:claude-sonnet-4-6 \
-  --limit 5   # smoke test: first 5 transcripts only
+  --disable-thinking openai:gpt-4o
 
-# Full run, extended thinking on the Anthropic model only:
-uv run python run_benchmark.py \
-  --models openai:gpt-4o openai:gpt-4o-mini anthropic:claude-sonnet-4-6 \
-  --enable-thinking anthropic:claude-sonnet-4-6
+# Disable thinking for all models:
+uv run python run_benchmark.py --models openai:gpt-4o anthropic:claude-sonnet-4-6 --disable-thinking
 
 # Re-run only models that don't have results yet (e.g. after a partial failure):
-uv run python run_benchmark.py --models openai:gpt-4o anthropic:claude-sonnet-4-6 --resume
+uv run python run_benchmark.py --models openai:o3-mini anthropic:claude-sonnet-4-6 --resume
 ```
 
 Flags: `--models` (required, `provider:model` pairs), `--dataset`,
 `--probe-questions`, `--out-root` (default `output/api/`), `--log-dir`
 (default `output/logs/`), `--max-tokens`, `--temperature`,
-`--enable-thinking [spec ...]` (no args = enable for every model in
-`--models`; with args, only for those specs), `--limit`, `--resume`,
-`--summary-json`/`--summary-md` (override output paths).
+`--disable-thinking [spec ...]` (no args = disable for every model in
+`--models`; with args, only for those specs — thinking is otherwise ON by
+default for all), `--limit`, `--resume`, `--summary-json`/`--summary-md`
+(override output paths).
 
 Outputs:
 - `output/logs/<provider>__<model>__<timestamp>.log` — full stdout/stderr per model run.
