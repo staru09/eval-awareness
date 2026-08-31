@@ -31,7 +31,9 @@ eval-awareness/
 │   └── contrastive_pairs_16.txt   # copied from cls_corr_mi/data/
 ├── inference/
 │   ├── model_utils.py             # HF load/chat-template helpers
-│   └── run_inference.py           # generation + activation capture
+│   ├── run_inference.py           # local Qwen3-8B: generation + activation capture
+│   ├── api_clients.py             # OpenAI/Anthropic provider adapters
+│   └── run_inference_api.py       # OpenAI/Anthropic: generation + verbalized probing
 ├── probes/
 │   ├── compute_probe.py           # step 1: 16-pair direction + random controls
 │   ├── score_activations.py       # step 2: project saved activations onto probe
@@ -70,6 +72,34 @@ quick generation-only smoke test before running the full pipeline:
 cd inference
 uv run python run_inference.py --limit 2 --no-hidden-states
 ```
+
+## Running the benchmark on OpenAI / Anthropic models
+
+`inference/run_inference_api.py` is a drop-in alternative to
+`run_inference.py` for API models — they expose no hidden states, so it
+covers generation + verbalized probing only (no internal linear-probe
+steps 1-3, which are Qwen3-8B/HF-only). It reuses
+`probes/verbalize_probe.py`'s exact label-parsing logic and
+`probes/probe_questions.yaml`, and writes the same `reasoning_traces.jsonl`
+schema as `run_inference.py` (so `judges/gpt_judge.py` works unmodified on
+either), plus `verbalized_responses.csv` and `results/verbalized_auroc.json`
+— all under `output/api/<provider>__<model_slug>/` by default.
+
+Requires `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY` (loaded from `.env` via
+`python-dotenv` if installed — **never commit `.env`**, it's in
+`.gitignore`).
+
+```bash
+cd inference
+uv run python run_inference_api.py --provider openai --model gpt-4o
+uv run python run_inference_api.py --provider anthropic --model claude-sonnet-4-6 --enable-thinking
+```
+
+`--enable-thinking` requests Anthropic extended thinking (its `thinking`
+content blocks become `reasoning_trace`); for OpenAI it's best-effort only
+— most models expose no separate reasoning trace over the Chat Completions
+API, so `reasoning_trace` will be `null` unless the model/SDK happens to
+return a `reasoning_content` field.
 
 ## GPT judge (step 6, optional, qualitative)
 
