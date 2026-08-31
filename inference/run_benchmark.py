@@ -4,6 +4,9 @@ metrics summary.
 
 Wraps run_inference_api.py (one subprocess per model, so a crash/API error
 on one model doesn't take down the rest) and:
+  - runs all models concurrently by default (independent API calls to
+    different providers/models -- no reason to serialize them; cap with
+    --max-parallel, or set it to 1 to force sequential)
   - tees each model's stdout/stderr to both the console and a per-model
     timestamped log file under --log-dir
   - after all models finish, reads each model's
@@ -40,10 +43,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -126,8 +131,17 @@ def run_one_model(
     with open(log_path, "w", encoding="utf-8") as log_f:
         log_f.write(f"# command: {' '.join(cmd)}\n# started: {timestamp}\n\n")
         log_f.flush()
+        child_env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
         proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+            # Explicit UTF-8 on both ends: on Windows, text=True without
+            # `encoding=` defaults to the console's locale codepage (often
+            # cp1252), which can raise a UnicodeDecodeError on non-ASCII
+            # bytes in model output (curly quotes, em dashes, non-English
+            # text) -- confirmed via a real run. PYTHONIOENCODING keeps the
+            # child itself from hitting the same problem before its output
+            # even reaches this pipe.
+            encoding="utf-8", errors="replace", env=child_env,
         )
         assert proc.stdout is not None
         for line in proc.stdout:
@@ -240,6 +254,12 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=None, help="only run the first N transcripts per model (smoke test)")
     ap.add_argument("--resume", action="store_true", help="skip models that already have results/verbalized_auroc.json")
     ap.add_argument(
+        "--max-parallel", type=int, default=None,
+        help="Run at most this many models concurrently (default: all of them at once -- "
+             "these are independent API calls to different models/providers, so there's no "
+             "reason to serialize them). Set to 1 to force sequential execution.",
+    )
+    ap.add_argument(
         "--summary-json", default=None, type=Path,
         help="override the default timestamped path (default: out-root/Benchmark-<model-slug>-<timestamp>.json)",
     )
@@ -268,21 +288,35 @@ def main() -> None:
     summary_json = args.summary_json or (out_root / f"Benchmark-{run_slug}-{run_timestamp}.json")
     summary_md = args.summary_md or (out_root / f"Benchmark-{run_slug}-{run_timestamp}.md")
 
-    run_statuses = []
+    # Each model is an independent API call to a different provider/model,
+    # so there's no reason to serialize them -- run all (or up to
+    # --max-parallel) concurrently. Threads, not processes: each
+    # run_one_model() call spends its time blocked on subprocess I/O, which
+    # releases the GIL, so this parallelizes real wall-clock time.
+    to_run: list[tuple[str, str, str]] = []  # (spec_str, provider, model)
     for spec_str, (provider, model) in zip(args.models, model_specs):
         if args.resume and already_has_results(out_root, provider, model):
             print(f"--resume: skipping {provider}:{model} (results already present)")
             continue
-        enable_thinking = spec_str not in disabled_set
-        status = run_one_model(
-            provider, model,
-            dataset=Path(args.dataset), probe_questions=Path(args.probe_questions),
-            out_root=out_root, log_dir=log_dir,
-            max_tokens=args.max_tokens, temperature=args.temperature,
-            enable_thinking=enable_thinking, reasoning_effort=args.reasoning_effort,
-            limit=args.limit,
-        )
-        run_statuses.append(status)
+        to_run.append((spec_str, provider, model))
+
+    run_statuses = []
+    if to_run:
+        max_workers = args.max_parallel or len(to_run)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(
+                    run_one_model, provider, model,
+                    dataset=Path(args.dataset), probe_questions=Path(args.probe_questions),
+                    out_root=out_root, log_dir=log_dir,
+                    max_tokens=args.max_tokens, temperature=args.temperature,
+                    enable_thinking=spec_str not in disabled_set, reasoning_effort=args.reasoning_effort,
+                    limit=args.limit,
+                ): (provider, model)
+                for spec_str, provider, model in to_run
+            }
+            for fut in as_completed(futures):
+                run_statuses.append(fut.result())
 
     # Include models skipped by --resume in the summary too (they still have results).
     if args.resume:

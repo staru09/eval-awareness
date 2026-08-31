@@ -121,9 +121,12 @@ Without thinking, OpenAI goes through plain Chat Completions and
 
 Runs several OpenAI/Anthropic models in one command (one subprocess per
 model, via `run_inference_api.py`, so one model's API error doesn't take
-down the rest), tees each model's output to both the console and a
-timestamped per-model log file, and writes an aggregated comparison
-summary once everything finishes.
+down the rest), **concurrently by default** — they're independent API
+calls to different providers/models, so there's no reason to serialize
+them (cap with `--max-parallel N`, or set it to `1` to force sequential
+execution). Tees each model's output to both the console and a timestamped
+per-model log file, and writes an aggregated comparison summary once
+everything finishes.
 
 Thinking is **ON by default for every model**:
 
@@ -153,8 +156,8 @@ Flags: `--models` (required, `provider:model` pairs), `--dataset`,
 `--reasoning-effort` (OpenAI only, default `medium`),
 `--disable-thinking [spec ...]` (no args = disable for every model in
 `--models`; with args, only for those specs — thinking is otherwise ON by
-default for all), `--limit`, `--resume`, `--summary-json`/`--summary-md`
-(override output paths).
+default for all), `--max-parallel` (default: all models at once), `--limit`,
+`--resume`, `--summary-json`/`--summary-md` (override output paths).
 
 Outputs:
 - `output/logs/<provider>__<model>__<timestamp>.log` — full stdout/stderr per model run.

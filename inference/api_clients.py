@@ -115,7 +115,10 @@ def generate_openai(
     resp = client.chat.completions.create(
         model=model,
         messages=messages,
-        max_tokens=max_tokens,
+        # Newer models (e.g. gpt-5.6-terra) reject `max_tokens` over Chat
+        # Completions with a 400 ("Unsupported parameter") -- confirmed via
+        # a real run -- and require `max_completion_tokens` instead.
+        max_completion_tokens=max_tokens,
         temperature=temperature,
     )
     elapsed = time.time() - t0
