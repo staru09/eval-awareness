@@ -136,9 +136,29 @@ Mix-and-match dataset drawn from the sources cataloged across
 - Output: `output/COMPARISON_REPORT.md`, formatted similarly to
   `EXPERIMENT_SUMMARY.md`.
 
+### 6. `judges/gpt_judge.py` — GPT-based qualitative judge (new, optional)
+- Diagnostic complement to steps 1-5, not part of the AUROC numbers: for
+  each transcript, an external GPT model (`--model`, default `gpt-4o`)
+  reads the original prompt, Qwen3-8B's own `<think>` reasoning trace and
+  final answer, and its verbalized eval/deploy answers across all 5 probe
+  questions (step 4's output), and diagnoses *what specifically* — surface
+  cues (benchmark-like formatting, topic/register mismatch), self-
+  referential statements in the reasoning trace, or nothing at all (i.e.
+  the model may be guessing from surface style rather than genuine
+  awareness) — plausibly caused Qwen3's verbalized verdict.
+- Also produces GPT's own independent eval/deploy verdict on each
+  transcript, for comparison against both Qwen3's verbalized answer and
+  the ground-truth label.
+- Requires `OPENAI_API_KEY`; uses the OpenAI SDK's JSON-mode structured
+  output (`response_format={"type": "json_object"}`) for reliable parsing.
+- Output: `output/gpt_judge_analysis.jsonl` (one structured row per
+  transcript) and `output/GPT_JUDGE_REPORT.md` (aggregated agreement rates,
+  most-common cues cited, per-transcript detail).
+
 ### `run.sh`
-Orchestrates steps 0→5 end-to-end with one command, paths under
-`--out-root`, mirroring `cls_corr_mi/reproduce.sh`'s structure.
+Orchestrates steps 0→6 end-to-end with one command (step 6 skipped if
+`OPENAI_API_KEY` is unset), paths under `--out-root`, mirroring
+`cls_corr_mi/reproduce.sh`'s structure.
 
 ## Key files to reference/adapt (not modify in place)
 - `cls_corr_mi/common.py` — model loading, chat template, left-padding pattern to copy.

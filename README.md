@@ -40,6 +40,9 @@ eval-awareness/
 ├── analysis/
 │   ├── classify_auroc.py          # step 3: internal-probe AUROC (n=20, LOO accuracy)
 │   └── compare_internal_vs_verbal.py  # step 5: internal vs. verbalized comparison
+├── judges/
+│   └── gpt_judge.py               # step 6 (optional): GPT reads Qwen3's <think>
+│                                   # trace + verbalized answers, diagnoses cues
 └── output/                        # run artifacts (git-ignored; created at runtime)
 ```
 
@@ -66,6 +69,34 @@ quick generation-only smoke test before running the full pipeline:
 ```bash
 cd inference
 uv run python run_inference.py --limit 2 --no-hidden-states
+```
+
+## GPT judge (step 6, optional, qualitative)
+
+`judges/gpt_judge.py` is a diagnostic complement to the quantitative
+pipeline above — it doesn't produce AUROC numbers, it explains them. For
+each transcript it hands an external GPT model (`--model`, default
+`gpt-4o`) the original prompt, Qwen3-8B's own `<think>` reasoning trace and
+final answer, and its verbalized eval/deploy answers across all 5 probe
+questions, then asks GPT to diagnose *what specifically* (surface cues,
+self-referential statements in the reasoning trace, or nothing at all —
+i.e. the model may be guessing from style) plausibly caused Qwen3's
+verbalized verdict, plus GPT's own independent read for comparison.
+
+Requires `OPENAI_API_KEY` (see `.env.example` once created, or export
+directly). Outputs `output/gpt_judge_analysis.jsonl` (one row per
+transcript, structured) and `output/GPT_JUDGE_REPORT.md` (aggregated:
+agreement rates with ground truth / with Qwen's verbalized answer, most
+common cues cited, per-transcript detail).
+
+```bash
+cd judges
+uv run python gpt_judge.py \
+  --reasoning-traces ../output/reasoning_traces.jsonl \
+  --verbalized-csv ../output/verbalized_responses.csv \
+  --model gpt-4o \
+  --out-jsonl ../output/gpt_judge_analysis.jsonl \
+  --out-report ../output/GPT_JUDGE_REPORT.md
 ```
 
 ## Known deviations from plan.md

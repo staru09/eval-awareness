@@ -73,4 +73,16 @@ echo "== Step 5: compare_internal_vs_verbal =="
     --pooling last \
     --out "../$OUT_ROOT/COMPARISON_REPORT.md" )
 
-echo "Done. See $OUT_ROOT/COMPARISON_REPORT.md"
+echo "== Step 6 (optional): gpt_judge =="
+if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+  ( cd judges && uv run python gpt_judge.py \
+      --reasoning-traces "../$OUT_ROOT/reasoning_traces.jsonl" \
+      --verbalized-csv "../$OUT_ROOT/verbalized_responses.csv" \
+      --model gpt-4o \
+      --out-jsonl "../$OUT_ROOT/gpt_judge_analysis.jsonl" \
+      --out-report "../$OUT_ROOT/GPT_JUDGE_REPORT.md" )
+else
+  echo "OPENAI_API_KEY not set, skipping GPT judge step."
+fi
+
+echo "Done. See $OUT_ROOT/COMPARISON_REPORT.md and $OUT_ROOT/GPT_JUDGE_REPORT.md"
