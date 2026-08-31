@@ -197,21 +197,24 @@ def generate_anthropic(
 ) -> GenResult:
     """Generate via the Messages API.
 
-    With `enable_thinking=True`, requests extended thinking
-    (`thinking={"type": "enabled", "budget_tokens": ...}`); Anthropic
-    requires `temperature=1.0` and no `top_p`/`top_k` override when
-    thinking is enabled, and `max_tokens` must exceed `thinking_budget_tokens`.
-    Response content blocks of type "thinking" become reasoning_trace,
-    type "text" becomes final_text.
+    `temperature`/`thinking_budget_tokens` are accepted for interface
+    parity with generate_openai but NOT forwarded: the installed SDK's
+    `Messages.create()` has no `temperature`/`top_p`/`top_k` parameter at
+    all (confirmed against the installed anthropic package — a real
+    `TypeError: unexpected keyword argument 'temperature'` from an earlier
+    run caught this; sampling is apparently not client-configurable on
+    this API version).
+
+    With `enable_thinking=True`, requests extended thinking via
+    `thinking={"type": "adaptive"}` (the SDK's currently-recommended
+    variant; the older `{"type": "enabled", "budget_tokens": ...}` form is
+    deprecated per this SDK's own runtime warning). Response content
+    blocks of type "thinking" become reasoning_trace, type "text" becomes
+    final_text.
     """
     kwargs: dict = dict(model=model, max_tokens=max_tokens, messages=messages)
     if enable_thinking:
-        kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget_tokens}
-        kwargs["temperature"] = 1.0
-        if max_tokens <= thinking_budget_tokens:
-            kwargs["max_tokens"] = thinking_budget_tokens + max_tokens
-    else:
-        kwargs["temperature"] = temperature
+        kwargs["thinking"] = {"type": "adaptive"}
 
     LOG.debug(
         "-> Anthropic request: model=%s max_tokens=%d thinking=%s n_messages=%d last_msg=%r",
