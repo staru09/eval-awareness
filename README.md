@@ -94,17 +94,21 @@ Thinking/reasoning-trace capture is **ON by default**:
 
 ```bash
 cd inference
-uv run python run_inference_api.py --provider openai --model o3-mini
+uv run python run_inference_api.py --provider openai --model gpt-5.6
 uv run python run_inference_api.py --provider anthropic --model claude-sonnet-4-6
 ```
 
 For Anthropic this requests extended thinking (its `thinking` content
 blocks become `reasoning_trace`). For OpenAI it routes to the **Responses
-API** with `reasoning.summary="auto"` requested — this only works for an
-actual reasoning-capable model (`o1`, `o3`, `o3-mini`, `gpt-5-thinking`,
-...); a non-reasoning model like `gpt-4o` doesn't accept the `reasoning`
-param over this API and will error, so pass `--no-thinking` when using a
-non-reasoning OpenAI model:
+API** with `reasoning.effort`/`reasoning.summary="auto"` requested — this
+only works for an actual reasoning-capable model (the gpt-5.x family:
+`gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`,
+`gpt-5.4`, ...); a non-reasoning model like `gpt-4o` doesn't accept the
+`reasoning` param over this API and will error, so pass `--no-thinking`
+when using a non-reasoning OpenAI model. Tune how hard it reasons with
+`--reasoning-effort` (`none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`,
+default `medium`, matching `gpt-5.5`'s own default — which values a given
+model actually supports varies):
 
 ```bash
 uv run python run_inference_api.py --provider openai --model gpt-4o --no-thinking
@@ -125,11 +129,11 @@ Thinking is **ON by default for every model**:
 
 ```bash
 cd inference
-uv run python run_benchmark.py --models openai:o3-mini anthropic:claude-sonnet-4-6
+uv run python run_benchmark.py --models openai:gpt-5.6 anthropic:claude-sonnet-4-6
 
 # Smoke test: first 5 transcripts only
 uv run python run_benchmark.py \
-  --models openai:o3-mini anthropic:claude-sonnet-4-6 --limit 5
+  --models openai:gpt-5.6 anthropic:claude-sonnet-4-6 --limit 5
 
 # gpt-4o isn't a reasoning model -- disable thinking for it specifically:
 uv run python run_benchmark.py \
@@ -140,12 +144,13 @@ uv run python run_benchmark.py \
 uv run python run_benchmark.py --models openai:gpt-4o anthropic:claude-sonnet-4-6 --disable-thinking
 
 # Re-run only models that don't have results yet (e.g. after a partial failure):
-uv run python run_benchmark.py --models openai:o3-mini anthropic:claude-sonnet-4-6 --resume
+uv run python run_benchmark.py --models openai:gpt-5.6 anthropic:claude-sonnet-4-6 --resume
 ```
 
 Flags: `--models` (required, `provider:model` pairs), `--dataset`,
 `--probe-questions`, `--out-root` (default `output/api/`), `--log-dir`
 (default `output/logs/`), `--max-tokens`, `--temperature`,
+`--reasoning-effort` (OpenAI only, default `medium`),
 `--disable-thinking [spec ...]` (no args = disable for every model in
 `--models`; with args, only for those specs — thinking is otherwise ON by
 default for all), `--limit`, `--resume`, `--summary-json`/`--summary-md`

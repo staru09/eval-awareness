@@ -84,6 +84,7 @@ def generate_openai(
     max_tokens: int = 2048,
     temperature: float = 0.7,
     enable_thinking: bool = False,
+    reasoning_effort: str = "medium",
 ) -> GenResult:
     """Generate a response, optionally with a captured reasoning trace.
 
@@ -92,14 +93,19 @@ def generate_openai(
     model, so `reasoning_trace` is always None here.
 
     `enable_thinking=True`: routes to `_generate_openai_reasoning`, which
-    uses the Responses API with `reasoning.summary` requested. This only
-    returns a non-empty trace for an actual reasoning-capable model (o1,
-    o3, o3-mini, gpt-5-thinking, ...) — passing a non-reasoning model like
-    gpt-4o with --enable-thinking will error or simply come back with no
-    reasoning trace, since the `reasoning` param isn't valid for it.
+    uses the Responses API with `reasoning.effort`/`reasoning.summary`
+    requested. This only works with an actual reasoning-capable model --
+    the gpt-5.x family (gpt-5.6, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna,
+    gpt-5.5, gpt-5.4, ...) -- passing a non-reasoning model like gpt-4o
+    with --enable-thinking will error, since the `reasoning` param isn't
+    valid for it. `reasoning_effort`: one of none/minimal/low/medium/high/
+    xhigh/max (model-dependent which are supported; "medium" is a safe
+    default matching gpt-5.5's own default).
     """
     if enable_thinking:
-        return _generate_openai_reasoning(client, model, messages, max_tokens=max_tokens)
+        return _generate_openai_reasoning(
+            client, model, messages, max_tokens=max_tokens, reasoning_effort=reasoning_effort,
+        )
 
     LOG.debug(
         "-> OpenAI request: model=%s max_tokens=%d temperature=%.2f n_messages=%d last_msg=%r",
@@ -126,25 +132,31 @@ def generate_openai(
     return GenResult(reasoning_trace=reasoning_trace, final_text=final_text, n_output_tokens=n_tokens)
 
 
-def _generate_openai_reasoning(client, model: str, messages: list[dict], *, max_tokens: int) -> GenResult:
-    """Generate via the Responses API with a reasoning summary requested.
+def _generate_openai_reasoning(
+    client, model: str, messages: list[dict], *, max_tokens: int, reasoning_effort: str = "medium",
+) -> GenResult:
+    """Generate via the Responses API with reasoning effort + summary requested.
 
-    Reasoning models (o1/o3/o3-mini/gpt-5-thinking/...) generally reject a
-    `temperature` override, so none is sent here. `reasoning.summary="auto"`
-    asks the API to include a natural-language summary of the model's
-    reasoning as a separate "reasoning" output item; plain output text
-    comes back as "message" output items (or via the SDK's `output_text`
-    convenience property, used as a fallback).
+    Reasoning models (the gpt-5.x family -- gpt-5.6, gpt-5.6-sol,
+    gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.4, ...) generally reject a
+    `temperature` override, so none is sent here. `reasoning.effort` is a
+    required-in-practice tuning knob (model-dependent defaults, "medium"
+    for gpt-5.5) controlling how much the model reasons; `reasoning.summary
+    ="auto"` asks the API to include a natural-language summary of that
+    reasoning as a separate "reasoning" output item -- the raw reasoning
+    tokens themselves are never exposed, only this summary. Plain output
+    text comes back as "message" output items (or via the SDK's
+    `output_text` convenience property, used as a fallback).
     """
     LOG.debug(
-        "-> OpenAI (reasoning) request: model=%s max_output_tokens=%d n_messages=%d last_msg=%r",
-        model, max_tokens, len(messages), _preview(messages[-1]["content"]),
+        "-> OpenAI (reasoning) request: model=%s max_output_tokens=%d effort=%s n_messages=%d last_msg=%r",
+        model, max_tokens, reasoning_effort, len(messages), _preview(messages[-1]["content"]),
     )
     t0 = time.time()
     resp = client.responses.create(
         model=model,
         input=messages,
-        reasoning={"summary": "auto"},
+        reasoning={"effort": reasoning_effort, "summary": "auto"},
         max_output_tokens=max_tokens,
     )
     elapsed = time.time() - t0
@@ -194,11 +206,14 @@ def generate_anthropic(
     temperature: float = 1.0,
     enable_thinking: bool = False,
     thinking_budget_tokens: int = 4096,
+    reasoning_effort: str = "medium",
 ) -> GenResult:
     """Generate via the Messages API.
 
-    `temperature`/`thinking_budget_tokens` are accepted for interface
-    parity with generate_openai but NOT forwarded: the installed SDK's
+    `temperature`/`thinking_budget_tokens`/`reasoning_effort` are accepted
+    for interface parity with generate_openai but NOT forwarded (Anthropic
+    has no effort-level equivalent; `thinking={"type": "adaptive"}` picks
+    its own level internally). The installed SDK's
     `Messages.create()` has no `temperature`/`top_p`/`top_k` parameter at
     all (confirmed against the installed anthropic package — a real
     `TypeError: unexpected keyword argument 'temperature'` from an earlier

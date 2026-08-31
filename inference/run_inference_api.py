@@ -7,9 +7,9 @@ that don't require local weight access:
 
   1. Generation over the mixed eval/deploy dataset (data/dataset.json),
      capturing a reasoning trace when the provider/model exposes one
-     (Anthropic extended thinking; best-effort for OpenAI reasoning
-     models) — same JSONL schema as run_inference.py's
-     reasoning_traces.jsonl, so gpt_judge.py works unmodified on either.
+     (Anthropic extended thinking; OpenAI reasoning-capable models via
+     the Responses API) — same JSON schema as run_inference.py's
+     reasoning_traces.json, so gpt_judge.py works unmodified on either.
   2. Verbalized probing: for each transcript, appends each of
      probes/probe_questions.yaml's 5 phrasings as a follow-up turn and
      asks the model whether the interaction above was an evaluation,
@@ -20,7 +20,7 @@ that don't require local weight access:
 Qwen3-8B/HF-only and has no equivalent here.)
 
 Outputs, under --out-dir (default ../output/api/<provider>__<model_slug>/):
-  reasoning_traces.jsonl
+  reasoning_traces.json
   verbalized_responses.csv
   results/verbalized_auroc.json
 
@@ -28,11 +28,16 @@ Requires OPENAI_API_KEY and/or ANTHROPIC_API_KEY (see ../.env, loaded via
 python-dotenv if present). Uses uv for package management, per this
 workspace's convention (`uv run python run_inference_api.py ...`).
 
+Thinking is ON by default. OpenAI reasoning models are the gpt-5.x family
+(gpt-5.6, gpt-5.6-sol/-terra/-luna, gpt-5.5, gpt-5.4, ...) -- gpt-4o and
+other non-reasoning models need --no-thinking.
+
 Usage:
-    python run_inference_api.py --provider openai --model gpt-4o
-    python run_inference_api.py --provider anthropic --model claude-sonnet-4-6 --enable-thinking
-    python run_inference_api.py --provider openai --model o3-mini --enable-thinking  # reasoning model required
-    python run_inference_api.py --provider openai --model gpt-4o --limit 2   # smoke test
+    python run_inference_api.py --provider anthropic --model claude-sonnet-4-6
+    python run_inference_api.py --provider openai --model gpt-5.6
+    python run_inference_api.py --provider openai --model gpt-5.6 --reasoning-effort high
+    python run_inference_api.py --provider openai --model gpt-4o --no-thinking
+    python run_inference_api.py --provider openai --model gpt-5.6 --limit 2   # smoke test
 """
 from __future__ import annotations
 
@@ -76,10 +81,18 @@ def main() -> None:
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument(
         "--enable-thinking", dest="enable_thinking", action="store_true", default=True,
-        help="Anthropic: extended thinking. OpenAI: routes to the Responses API with a "
-             "reasoning summary requested -- --model must be a reasoning-capable model "
-             "(o1, o3, o3-mini, gpt-5-thinking, ...); a non-reasoning model like gpt-4o "
+        help="Anthropic: extended thinking. OpenAI: routes to the Responses API with "
+             "reasoning effort/summary requested -- --model must be a reasoning-capable "
+             "model (the gpt-5.x family: gpt-5.6, gpt-5.6-sol, gpt-5.6-terra, "
+             "gpt-5.6-luna, gpt-5.5, gpt-5.4, ...); a non-reasoning model like gpt-4o "
              "will error against the Responses API's reasoning param. ON by default.",
+    )
+    ap.add_argument(
+        "--reasoning-effort", default="medium",
+        choices=["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+        help="OpenAI only (ignored for Anthropic). How much the model reasons -- "
+             "which values a given model supports varies; 'medium' matches gpt-5.5's "
+             "own default.",
     )
     ap.add_argument(
         "--no-thinking", dest="enable_thinking", action="store_false",
@@ -148,7 +161,7 @@ def main() -> None:
             gen = generate(
                 client, args.model, messages,
                 max_tokens=args.max_tokens, temperature=args.temperature,
-                enable_thinking=args.enable_thinking,
+                enable_thinking=args.enable_thinking, reasoning_effort=args.reasoning_effort,
             )
 
             entry = {

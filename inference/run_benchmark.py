@@ -12,16 +12,17 @@ on one model doesn't take down the rest) and:
     ../EXPERIMENT_SUMMARY.md's six-model table
 
 Thinking/reasoning-trace capture is ON by default for every model (uses a
-reasoning-capable OpenAI model like o3-mini, not gpt-4o, which errors
+reasoning-capable OpenAI model -- the gpt-5.x family: gpt-5.6,
+gpt-5.6-sol/-terra/-luna, gpt-5.5, gpt-5.4 -- not gpt-4o, which errors
 against the Responses API's reasoning param -- see --disable-thinking).
 
 Usage:
     # Full run, thinking on by default for both models:
-    python run_benchmark.py --models openai:o3-mini anthropic:claude-sonnet-4-6
+    python run_benchmark.py --models openai:gpt-5.6 anthropic:claude-sonnet-4-6
 
     # Smoke test, first 5 transcripts only:
     python run_benchmark.py \
-      --models openai:o3-mini anthropic:claude-sonnet-4-6 --limit 5
+      --models openai:gpt-5.6 anthropic:claude-sonnet-4-6 --limit 5
 
     # gpt-4o isn't a reasoning model -- disable thinking for it specifically:
     python run_benchmark.py \
@@ -32,7 +33,7 @@ Usage:
     python run_benchmark.py --models openai:gpt-4o anthropic:claude-sonnet-4-6 --disable-thinking
 
     # Re-run only models whose output is missing/incomplete:
-    python run_benchmark.py --models openai:o3-mini anthropic:claude-sonnet-4-6 --resume
+    python run_benchmark.py --models openai:gpt-5.6 anthropic:claude-sonnet-4-6 --resume
 """
 from __future__ import annotations
 
@@ -91,6 +92,7 @@ def run_one_model(
     max_tokens: int,
     temperature: float,
     enable_thinking: bool,
+    reasoning_effort: str,
     limit: int | None,
 ) -> dict:
     """Runs run_inference_api.py for one model as a subprocess, tees output
@@ -110,6 +112,7 @@ def run_one_model(
         "--out-dir", str(out_dir),
         "--max-tokens", str(max_tokens),
         "--temperature", str(temperature),
+        "--reasoning-effort", reasoning_effort,
     ]
     # run_inference_api.py's own --enable-thinking now defaults to True, so
     # explicitly pass --no-thinking when this model should have it disabled
@@ -223,6 +226,11 @@ def main() -> None:
     ap.add_argument("--max-tokens", type=int, default=2048)
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument(
+        "--reasoning-effort", default="medium",
+        choices=["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+        help="OpenAI only (ignored for Anthropic, and for any model with thinking disabled).",
+    )
+    ap.add_argument(
         "--disable-thinking", nargs="*", default=None,
         help="Thinking/reasoning-trace capture is ON by default for every model in "
              "--models. Pass this to disable it -- no args disables for all models, "
@@ -271,7 +279,8 @@ def main() -> None:
             dataset=Path(args.dataset), probe_questions=Path(args.probe_questions),
             out_root=out_root, log_dir=log_dir,
             max_tokens=args.max_tokens, temperature=args.temperature,
-            enable_thinking=enable_thinking, limit=args.limit,
+            enable_thinking=enable_thinking, reasoning_effort=args.reasoning_effort,
+            limit=args.limit,
         )
         run_statuses.append(status)
 
