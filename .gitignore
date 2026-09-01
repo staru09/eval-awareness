@@ -3,3 +3,4 @@ __pycache__/
 output/
 test-output/
 .env
+dashboard/node_modules

@@ -127,7 +127,7 @@ and run this benchmark against it from your local machine, per
 
 ```bash
 # On the VM:
-vllm serve Qwen/Qwen3-8B --host 0.0.0.0 --port 8000
+vllm serve Qwen/Qwen3-8B --host 0.0.0.0 --port 8000 --reasoning-parser qwen3
 
 # Locally:
 cd inference
@@ -136,16 +136,49 @@ uv run python run_inference_api.py \
   --base-url http://<vm-ip>:8000/v1
 ```
 
+`run_inference_api.py --max-parallel N` runs N transcripts concurrently via a
+thread pool (default 1, sequential) — safe to raise for a self-hosted vLLM
+server, which continuously batches concurrent requests on the GPU rather than
+queuing them serially. Check your server's own reported capacity first: vLLM
+prints `Maximum concurrency for <ctx_len> tokens per request: <N>x` at
+startup — that's the worst-case bound assuming every request fills the full
+context window; with the short prompts in this dataset, real headroom is
+much higher, so `--max-parallel 20` (all 20 transcripts at once) is fine on
+a single modern GPU serving Qwen3-8B.
+
 `--base-url` is required for this provider. No real API key is needed
 (vLLM ignores it) unless you've configured `--api-key` server-side, in
-which case set `VLLM_API_KEY` in `.env`. Reasoning capture works
-differently here than for OpenAI/Anthropic: vLLM serves open-weight models
-(Qwen3, DeepSeek-R1, ...) that emit their reasoning inline as
-`<think>...</think>` in the response text (same convention as
-`run_inference.py`'s local-HF path), not via a separate Responses-API
-item — `--enable-thinking`/`--no-thinking` toggles this via vLLM's
-`chat_template_kwargs.enable_thinking` mechanism. `--reasoning-effort` has
-no open-weight-model equivalent and is ignored for this provider.
+which case set `VLLM_API_KEY` in `.env`. **Start the vLLM server with
+`--reasoning-parser <name>` matching the served model** (`qwen3` for
+Qwen3) — this makes vLLM itself split reasoning out of the response into a
+separate `message.reasoning` field (not part of the OpenAI SDK's declared
+schema, but reachable via `getattr`), rather than leaving raw
+`<think>...</think>` tags inside `content`. `generate_vllm` in
+`api_clients.py` reads that field directly when present, and only falls
+back to regex-splitting literal `<think>` tags out of `content` if the
+server has no reasoning parser configured. **Getting the parser wrong
+(or omitting it) silently breaks things** — confirmed on a real run: with
+`--reasoning-parser deepseek_r1` against Qwen3 (parser/model mismatch),
+every verbalized-probe answer landed entirely in the `reasoning` field
+with `content: null`, producing 100% parse failures across all 100
+verbalized-probe calls (20 transcripts × 5 probes) — not a crash, just
+silently empty output, so verify with a manual curl (see below) before
+trusting a full run. `--enable-thinking`/`--no-thinking` toggles thinking
+mode via vLLM's `chat_template_kwargs.enable_thinking` mechanism.
+`--reasoning-effort` has no open-weight-model equivalent and is ignored
+for this provider.
+
+Sanity-check the server before running the full benchmark:
+
+```bash
+curl -s http://<vm-ip>:8000/v1/chat/completions -H "Content-Type: application/json" -d '{
+  "model": "Qwen/Qwen3-8B",
+  "messages": [{"role":"user","content":"Hi, how are you?"}],
+  "max_tokens": 100,
+  "chat_template_kwargs": {"enable_thinking": false}
+}'
+# content should be non-null/non-empty here.
+```
 
 ### Multi-model runner: `run_benchmark.py`
 
