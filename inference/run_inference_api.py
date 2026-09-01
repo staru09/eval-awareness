@@ -59,7 +59,9 @@ import json
 import logging
 import re
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -119,6 +121,13 @@ def main() -> None:
     )
     ap.add_argument("--limit", type=int, default=None, help="only run the first N transcripts (smoke test)")
     ap.add_argument(
+        "--max-parallel", type=int, default=1,
+        help="run this many transcripts concurrently (thread pool; each transcript's own "
+             "probe questions still run sequentially after its main generation). Safe to "
+             "raise for self-hosted vLLM (continuous batching) or API providers with "
+             "sufficient rate limits. Default 1 (sequential).",
+    )
+    ap.add_argument(
         "--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="DEBUG also logs every API request/response (model, tokens, latency, previews) from api_clients.py",
     )
@@ -166,7 +175,79 @@ def main() -> None:
     json_path = out_dir / "results" / "verbalized_auroc.json"
 
     entries: list[dict] = []
-    csv_rows = []
+    csv_rows: list[dict] = []
+    write_lock = threading.Lock()
+
+    def process_row(row: dict) -> None:
+        t0 = time.time()
+        messages = [{"role": "user", "content": row["text"]}]
+        gen = generate(
+            client, args.model, messages,
+            max_tokens=args.max_tokens, temperature=args.temperature,
+            enable_thinking=args.enable_thinking, reasoning_effort=args.reasoning_effort,
+        )
+
+        entry = {
+            "id": row["id"],
+            "prompt_id": row["prompt_id"],
+            "source": row["source"],
+            "category": row["category"],
+            "ground_truth_label": row["label"],
+            "prompt_text": row["text"],
+            "generated_text": gen.final_text,
+            "reasoning_trace": gen.reasoning_trace,
+            "final_answer": gen.final_text,
+            "n_generated_tokens": gen.n_output_tokens,
+            "generation_config": {
+                "max_tokens": args.max_tokens,
+                "temperature": args.temperature,
+                "enable_thinking": args.enable_thinking,
+            },
+            "model": args.model,
+            "provider": args.provider,
+            "elapsed_s": round(time.time() - t0, 2),
+        }
+        with write_lock:
+            entries.append(entry)
+            # Rewrite the full array after each transcript (cheap at this
+            # dataset size) so a partial run still leaves valid JSON behind
+            # if interrupted, rather than only the final entry being lost.
+            log_path.write_text(json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8")
+        LOG.info("[%s] generated (%s tokens, %.1fs)", row["id"], gen.n_output_tokens, entry["elapsed_s"])
+
+        # --- verbalized probing: one follow-up turn per probe question ---
+        for pq in probe_questions:
+            followup_messages = [
+                {"role": "user", "content": row["text"]},
+                {"role": "assistant", "content": gen.final_text},
+                {"role": "user", "content": pq["template_text"]},
+            ]
+            pq_gen = generate(
+                client, args.model, followup_messages,
+                max_tokens=512, temperature=args.temperature, enable_thinking=False,
+            )
+            eval_signal, parse_status = resolve_answer(
+                pq_gen.final_text, pq["answer"]["real"], pq["answer"]["eval"]
+            )
+            csv_row = {
+                "transcript_id": row["id"],
+                "prompt_id": row["prompt_id"],
+                "probe_id": pq["id"],
+                "source": row["source"],
+                "category": row["category"],
+                "ground_truth_label": row["label"],
+                "eval_signal": eval_signal,
+                "parse_status": parse_status,
+                "raw_response": pq_gen.final_text,
+            }
+            with write_lock:
+                writer.writerow(csv_row)
+                csv_f.flush()
+                csv_rows.append(csv_row)
+            LOG.info(
+                "  [%s / %s] eval_signal=%.1f (%s)", row["id"], pq["id"], eval_signal, parse_status
+            )
+
     with open(csv_path, "w", newline="", encoding="utf-8") as csv_f:
         writer = csv.DictWriter(
             csv_f,
@@ -177,72 +258,19 @@ def main() -> None:
         )
         writer.writeheader()
 
-        for row in dataset:
-            t0 = time.time()
-            messages = [{"role": "user", "content": row["text"]}]
-            gen = generate(
-                client, args.model, messages,
-                max_tokens=args.max_tokens, temperature=args.temperature,
-                enable_thinking=args.enable_thinking, reasoning_effort=args.reasoning_effort,
-            )
-
-            entry = {
-                "id": row["id"],
-                "prompt_id": row["prompt_id"],
-                "source": row["source"],
-                "category": row["category"],
-                "ground_truth_label": row["label"],
-                "prompt_text": row["text"],
-                "generated_text": gen.final_text,
-                "reasoning_trace": gen.reasoning_trace,
-                "final_answer": gen.final_text,
-                "n_generated_tokens": gen.n_output_tokens,
-                "generation_config": {
-                    "max_tokens": args.max_tokens,
-                    "temperature": args.temperature,
-                    "enable_thinking": args.enable_thinking,
-                },
-                "model": args.model,
-                "provider": args.provider,
-                "elapsed_s": round(time.time() - t0, 2),
-            }
-            entries.append(entry)
-            # Rewrite the full array after each transcript (cheap at this
-            # dataset size) so a partial run still leaves valid JSON behind
-            # if interrupted, rather than only the final entry being lost.
-            log_path.write_text(json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8")
-            LOG.info("[%s] generated (%s tokens, %.1fs)", row["id"], gen.n_output_tokens, entry["elapsed_s"])
-
-            # --- verbalized probing: one follow-up turn per probe question ---
-            for pq in probe_questions:
-                followup_messages = [
-                    {"role": "user", "content": row["text"]},
-                    {"role": "assistant", "content": gen.final_text},
-                    {"role": "user", "content": pq["template_text"]},
-                ]
-                pq_gen = generate(
-                    client, args.model, followup_messages,
-                    max_tokens=512, temperature=args.temperature, enable_thinking=False,
-                )
-                eval_signal, parse_status = resolve_answer(
-                    pq_gen.final_text, pq["answer"]["real"], pq["answer"]["eval"]
-                )
-                csv_row = {
-                    "transcript_id": row["id"],
-                    "prompt_id": row["prompt_id"],
-                    "probe_id": pq["id"],
-                    "source": row["source"],
-                    "category": row["category"],
-                    "ground_truth_label": row["label"],
-                    "eval_signal": eval_signal,
-                    "parse_status": parse_status,
-                    "raw_response": pq_gen.final_text,
-                }
-                writer.writerow(csv_row)
-                csv_rows.append(csv_row)
-                LOG.info(
-                    "  [%s / %s] eval_signal=%.1f (%s)", row["id"], pq["id"], eval_signal, parse_status
-                )
+        if args.max_parallel <= 1:
+            for row in dataset:
+                process_row(row)
+        else:
+            with ThreadPoolExecutor(max_workers=args.max_parallel) as pool:
+                futures = {pool.submit(process_row, row): row for row in dataset}
+                for future in as_completed(futures):
+                    row = futures[future]
+                    try:
+                        future.result()
+                    except Exception:
+                        LOG.exception("[%s] failed", row["id"])
+                        raise
 
     # --- per-probe + ensemble AUROC, same convention as verbalize_probe.py ---
     probe_ids = sorted({r["probe_id"] for r in csv_rows})

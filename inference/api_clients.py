@@ -360,24 +360,40 @@ def generate_vllm(
         model, max_tokens, temperature, enable_thinking, len(messages), _preview(messages[-1]["content"]),
     )
     t0 = time.time()
-    resp = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}},
-    )
+    kwargs: dict = dict(model=model, messages=messages, max_tokens=max_tokens, temperature=temperature)
+    if enable_thinking:
+        # Only attach chat_template_kwargs when actually toggling thinking on.
+        # Some served tokenizers (e.g. Mistral's tekken/mistral-common
+        # tokenizer, which has no Jinja chat template at all) reject *any*
+        # chat_template_kwargs -- even {"enable_thinking": False} -- with a
+        # 400 "chat_template is not supported for Mistral tokenizers."
+        # confirmed via a real run. Omitting the field entirely for the
+        # (default) False case sidesteps that for such models.
+        kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": True}}
+    resp = client.chat.completions.create(**kwargs)
     elapsed = time.time() - t0
     choice = resp.choices[0]
-    raw_text = choice.message.content or ""
+    raw_text = (choice.message.content or "").strip()
 
-    m = _THINK_RE.search(raw_text)
-    if m:
-        reasoning_trace = m.group(1).strip() or None
-        final_text = raw_text[m.end():].strip()
+    # With a server-side --reasoning-parser configured (recommended: match
+    # it to the served model, e.g. `qwen3` for Qwen3), vLLM already splits
+    # reasoning out of `content` into a separate, SDK-undeclared `reasoning`
+    # field (only reachable via getattr/model_extra) -- there are no raw
+    # <think> tags left in `content` to regex-split in that case. Fall back
+    # to <think>-tag splitting only if the server has no reasoning parser
+    # configured (content then still contains literal <think>...</think>).
+    server_side_reasoning = getattr(choice.message, "reasoning", None)
+    if server_side_reasoning is not None:
+        reasoning_trace = server_side_reasoning.strip() or None
+        final_text = raw_text
     else:
-        reasoning_trace = None
-        final_text = raw_text.strip()
+        m = _THINK_RE.search(raw_text)
+        if m:
+            reasoning_trace = m.group(1).strip() or None
+            final_text = raw_text[m.end():].strip()
+        else:
+            reasoning_trace = None
+            final_text = raw_text
 
     n_tokens = getattr(getattr(resp, "usage", None), "completion_tokens", None)
     LOG.debug(
