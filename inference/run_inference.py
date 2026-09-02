@@ -109,8 +109,13 @@ def main() -> None:
         summary_path.write_text(json.dumps(model_weight_summary(model), indent=2), encoding="utf-8")
 
     log_path = out_dir / "reasoning_traces.json"
-    n_layers = model.config.num_hidden_layers
-    d_model = model.config.hidden_size
+    # get_text_config() handles both plain configs and "unified"/multimodal
+    # configs that nest the text-decoder fields under a `text_config`
+    # sub-config (confirmed on a real run: Gemma4UnifiedConfig has no
+    # top-level num_hidden_layers/hidden_size at all).
+    text_config = model.config.get_text_config()
+    n_layers = text_config.num_hidden_layers
+    d_model = text_config.hidden_size
 
     entries: list[dict] = []
     for row in dataset:

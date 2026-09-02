@@ -19,6 +19,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from openai import BadRequestError
+
 LOG = logging.getLogger("api_clients")
 
 _ENV_LOADED = False
@@ -361,16 +363,32 @@ def generate_vllm(
     )
     t0 = time.time()
     kwargs: dict = dict(model=model, messages=messages, max_tokens=max_tokens, temperature=temperature)
-    if enable_thinking:
-        # Only attach chat_template_kwargs when actually toggling thinking on.
+    kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": enable_thinking}}
+    try:
+        resp = client.chat.completions.create(**kwargs)
+    except BadRequestError as e:
         # Some served tokenizers (e.g. Mistral's tekken/mistral-common
         # tokenizer, which has no Jinja chat template at all) reject *any*
         # chat_template_kwargs -- even {"enable_thinking": False} -- with a
         # 400 "chat_template is not supported for Mistral tokenizers."
-        # confirmed via a real run. Omitting the field entirely for the
-        # (default) False case sidesteps that for such models.
-        kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": True}}
-    resp = client.chat.completions.create(**kwargs)
+        # confirmed via a real run. Retry once without the field for such
+        # models. We can't detect this ahead of time from the model name
+        # alone, and omitting the field unconditionally instead breaks
+        # Qwen3-family models the other way: their own chat template
+        # defaults enable_thinking to True when the kwarg is absent, so a
+        # disable-thinking call would silently keep thinking on and blow
+        # through the follow-up probe's small token budget -- also
+        # confirmed via a real run (100% parse failures on a Qwen3-based
+        # model after an earlier fix that omitted the field unconditionally).
+        if "chat_template" not in str(e).lower():
+            raise
+        LOG.warning(
+            "vLLM rejected chat_template_kwargs for model=%s ('%s') -- retrying without it "
+            "(tokenizer has no Jinja chat template, e.g. Mistral's tekken tokenizer)",
+            model, e,
+        )
+        del kwargs["extra_body"]
+        resp = client.chat.completions.create(**kwargs)
     elapsed = time.time() - t0
     choice = resp.choices[0]
     raw_text = (choice.message.content or "").strip()
