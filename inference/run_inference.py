@@ -44,16 +44,14 @@ THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 THINK_CLOSE_ONLY_RE = re.compile(r"^(.*?)</think>", re.DOTALL)
 
 
-def split_reasoning(generated_text: str) -> tuple[str | None, str]:
+CHANNEL_HEADER_RE = re.compile(r"^\s*thought\s*\n", re.IGNORECASE)
+
+
+def split_reasoning(generated_text: str, gen_ids=None, tok=None) -> tuple[str | None, str]:
     """Split a thinking-mode response into (reasoning_trace, final_answer).
 
-    Returns (None, generated_text) when no </think> boundary is present at
-    all (e.g. thinking disabled, or the model didn't emit one) -- this is
-    NOT recoverable after the fact if it happens because a chat template's
-    turn-boundary special tokens got stripped by decode(skip_special_tokens=
-    True) before any text was saved (confirmed on Gemma-4-12B-OBLITERATED:
-    its "thought" turn boundary is a special token, not literal text, so
-    once stripped there is no delimiter left in the saved JSON at all).
+    Returns (None, generated_text) when no reasoning/answer boundary is
+    present at all (e.g. thinking disabled, or the model didn't emit one).
     """
     m = THINK_RE.search(generated_text)
     if m:
@@ -65,6 +63,30 @@ def split_reasoning(generated_text: str) -> tuple[str | None, str]:
         reasoning = m2.group(1).strip()
         final_answer = generated_text[m2.end():].strip()
         return reasoning, final_answer
+    # Gemma-4-OBLITERATED-family "channel" format: its own chat template
+    # emits <|channel>thought\n{reasoning}<channel|>{answer}<turn|>, per its
+    # tokenizer_config.json's response_schema.x-regex -- but <|channel>,
+    # <channel|>, and <turn|> are registered tokenizer *special* tokens (see
+    # eoc_token/soc_token/eot_token), unlike Qwen3's <think>/</think>, which
+    # are plain vocabulary text. A plain decode(skip_special_tokens=True)
+    # silently strips them with zero trace, destroying the boundary before
+    # any text is saved (confirmed on a real run: Gemma-4-12B-OBLITERATED,
+    # 20/20 transcripts landed as one undivided blob, unrecoverable from the
+    # saved text alone). Detected here at the *token* level, before decode
+    # throws that boundary away.
+    if gen_ids is not None and tok is not None:
+        close_id = tok.convert_tokens_to_ids("<channel|>")
+        if close_id is not None and close_id != tok.unk_token_id:
+            ids_list = gen_ids.tolist()
+            if close_id in ids_list:
+                idx = ids_list.index(close_id)
+                reasoning = tok.decode(ids_list[:idx], skip_special_tokens=True).strip()
+                # The leading "thought\n" header is plain generated text
+                # (not a special token), so it survives the token-level
+                # split -- strip it for a clean reasoning_trace.
+                reasoning = CHANNEL_HEADER_RE.sub("", reasoning).strip()
+                final_answer = tok.decode(ids_list[idx + 1:], skip_special_tokens=True).strip()
+                return reasoning, final_answer
     return None, generated_text.strip()
 
 
@@ -154,7 +176,7 @@ def main() -> None:
             )
         gen_ids = gen_out[0, inputs["input_ids"].shape[1]:]
         generated_text = tok.decode(gen_ids, skip_special_tokens=True)
-        reasoning_trace, final_answer = split_reasoning(generated_text)
+        reasoning_trace, final_answer = split_reasoning(generated_text, gen_ids=gen_ids, tok=tok)
 
         entry = {
             "id": row["id"],
