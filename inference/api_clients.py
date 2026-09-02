@@ -404,6 +404,28 @@ def generate_vllm(
     if server_side_reasoning is not None:
         reasoning_trace = server_side_reasoning.strip() or None
         final_text = raw_text
+        # Some served models never emit a closing </think> at all (they
+        # don't use the tag convention the --reasoning-parser expects), so
+        # the parser buckets the ENTIRE response into `reasoning` with
+        # `content` empty -- confirmed on a real run (OBLITERATUS-qwen3-4b,
+        # 20/20 transcripts: reasoning held the full, coherent response --
+        # direct replies or step-by-step analysis ending in a clear answer,
+        # not raw deliberation fragments -- while content was always "").
+        # Treat that as the real answer rather than silently returning an
+        # empty final_text, which corrupts every downstream use of it
+        # (e.g. the follow-up probe question is asked with this model's own
+        # reply as prior context -- an empty final_text means that context
+        # is blank).
+        if not final_text and reasoning_trace:
+            LOG.warning(
+                "vLLM returned reasoning but empty content for model=%s -- the "
+                "--reasoning-parser never saw a closing </think> from this model. "
+                "Treating the reasoning text as the real answer instead of "
+                "returning an empty final_text.",
+                model,
+            )
+            final_text = reasoning_trace
+            reasoning_trace = None
     else:
         m = _THINK_RE.search(raw_text)
         if m:
