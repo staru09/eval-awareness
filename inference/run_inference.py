@@ -32,20 +32,40 @@ import numpy as np
 from model_utils import ModelSpec, QWEN3_8B, apply_chat_template, load_hf_model, model_weight_summary
 
 THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+# Some chat templates (Qwen3's included) pre-seed the assistant turn with an
+# opening <think> tag as part of the *prompt* fed to generate() -- it's
+# never in the generated tokens, only the closing </think> is. Confirmed on
+# a real run (Qwen3.6-27B-OBLITERATED, 20/20 transcripts): THINK_RE above
+# never matched a single one, because there was no opening tag to match,
+# even though every transcript had exactly one literal </think> -- meaning
+# split_reasoning() silently fell through to "no reasoning trace" and dumped
+# the model's entire thinking process into final_answer instead. Handled
+# below as a second, close-tag-only pattern.
+THINK_CLOSE_ONLY_RE = re.compile(r"^(.*?)</think>", re.DOTALL)
 
 
 def split_reasoning(generated_text: str) -> tuple[str | None, str]:
     """Split a thinking-mode response into (reasoning_trace, final_answer).
 
-    Returns (None, generated_text) when no <think>...</think> block is
-    present (e.g. thinking disabled, or the model didn't emit one).
+    Returns (None, generated_text) when no </think> boundary is present at
+    all (e.g. thinking disabled, or the model didn't emit one) -- this is
+    NOT recoverable after the fact if it happens because a chat template's
+    turn-boundary special tokens got stripped by decode(skip_special_tokens=
+    True) before any text was saved (confirmed on Gemma-4-12B-OBLITERATED:
+    its "thought" turn boundary is a special token, not literal text, so
+    once stripped there is no delimiter left in the saved JSON at all).
     """
     m = THINK_RE.search(generated_text)
-    if not m:
-        return None, generated_text.strip()
-    reasoning = m.group(1).strip()
-    final_answer = generated_text[m.end():].strip()
-    return reasoning, final_answer
+    if m:
+        reasoning = m.group(1).strip()
+        final_answer = generated_text[m.end():].strip()
+        return reasoning, final_answer
+    m2 = THINK_CLOSE_ONLY_RE.search(generated_text)
+    if m2:
+        reasoning = m2.group(1).strip()
+        final_answer = generated_text[m2.end():].strip()
+        return reasoning, final_answer
+    return None, generated_text.strip()
 
 
 def pool_hidden_states(hidden_states, attn_mask):
