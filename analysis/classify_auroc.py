@@ -92,6 +92,7 @@ def main() -> None:
         labels = z["labels"]                          # [N]
         n_layers = int(z["n_layers"])
         n_random = int(z["n_random"])
+        model_key = str(z["model_key"]) if "model_key" in z else "unknown"
 
     layer_results: Dict[str, Dict] = {}
     for l in range(n_layers):
@@ -114,7 +115,7 @@ def main() -> None:
 
     peak_layer = max(layer_results, key=lambda k: layer_results[k]["real"]["auroc"])
     summary = {
-        "model_key": "qwen3_8b",
+        "model_key": model_key,
         "pooling": args.pooling,
         "n_samples": int(len(labels)),
         "n_layers": n_layers,
