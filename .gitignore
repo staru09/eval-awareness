@@ -4,3 +4,5 @@ output/
 test-output/
 .env
 dashboard/node_modules
+dashboard/dist
+dashboard/dev.log

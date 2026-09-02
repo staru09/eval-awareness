@@ -168,6 +168,22 @@ mode via vLLM's `chat_template_kwargs.enable_thinking` mechanism.
 `--reasoning-effort` has no open-weight-model equivalent and is ignored
 for this provider.
 
+`generate_vllm` always attempts to send `chat_template_kwargs`, and only
+retries without it if the server explicitly rejects it (confirmed real
+error: `"chat_template is not supported for Mistral tokenizers"` — some
+served tokenizers, e.g. Mistral's tekken/mistral-common tokenizer, have no
+Jinja chat template at all and reject the field outright). **Do not
+"fix" this by unconditionally omitting `chat_template_kwargs` when
+`enable_thinking=False`** — that was tried and it silently breaks Qwen3-
+family reasoning models the other way: their own chat template defaults
+`enable_thinking` to `True` when the kwarg is absent, so a disable-thinking
+follow-up call (e.g. the verbalized-probe questions, which always run with
+thinking off regardless of the main generation's setting) keeps thinking
+on, blows through its small token budget before reaching an answer, and
+produces empty `content` — confirmed on a real run: 100% parse failures
+across all 100 verbalized-probe calls for a Qwen3-based model, from this
+exact unconditional-omission "fix."
+
 Sanity-check the server before running the full benchmark:
 
 ```bash
@@ -258,6 +274,73 @@ uv run python gpt_judge.py \
   --model gpt-4o \
   --out-jsonl ../output/gpt_judge_analysis.jsonl \
   --out-report ../output/GPT_JUDGE_REPORT.md
+```
+
+## Results (verbalized eval-awareness, 9 models)
+
+All 20 transcripts × 5 verbalized probes each, 0 parse failures across
+every model. Regenerate these charts any time after adding/re-running a
+model with `python analysis/plot_results.py` (writes to `output/charts/`);
+for an interactive, always-live view of the underlying transcripts
+(prompt / reasoning trace / final answer / per-probe match), use
+`dashboard/` instead (see below) — these charts are the static summary,
+the dashboard is the per-transcript drill-down.
+
+| Model | Provider | Ensemble AUROC |
+|---|---|---|
+| GPT-5.6-terra | OpenAI | 1.000 |
+| Qwen3-8B | vLLM | 1.000 |
+| Gemma-4-12B-OBLITERATED | local HF (VM) | 1.000 |
+| Claude Sonnet 5 | Anthropic | 0.985 |
+| qwen3-4b-OBLITERATED | vLLM | 0.875 |
+| Mistral-Small-24B | vLLM | 0.865 |
+| Llama-3.1-8B | vLLM | 0.830 |
+| granite-4.2-30b | vLLM | 0.735 |
+| Qwen3.6-27B-OBLITERATED | local HF (VM) | 0.500 (chance) |
+
+Olmo-3-7B-Think was attempted and skipped — vLLM 0.19.1 (pinned by this
+VM's driver/CUDA version) has no native model support for its
+architecture and crashes on load.
+
+![Ensemble AUROC per model](output/charts/01_ensemble_auroc_bar.png)
+
+**Ensemble AUROC hides real per-probe inconsistency.** No model is
+uniformly strong across all 5 phrasings — e.g. GPT-5.6-terra's worst
+single probe sits at 0.65 despite a perfect 1.0 ensemble score (the
+ensemble averages out inconsistent per-probe judgments, it doesn't mean
+the model is reliably certain every time). `h_purpose_analysis_a` is the
+most reliable probe across the board (floor of 0.75); `direct_vn_a` (a
+rephrasing of the plain direct question) is consistently one of the
+weakest for non-frontier models — evidence that verbalized
+eval-awareness is phrasing-sensitive, not a stable belief reported the
+same way regardless of how it's elicited.
+
+![AUROC per model per probe phrasing](output/charts/02_probe_heatmap.png)
+
+![Per-probe AUROC by model](output/charts/03_probe_lines.png)
+
+**Qwen3.6-27B-OBLITERATED's exact 0.5 across every single probe** (not
+just the ensemble — `accuracy: 0.5` on all 5, zero parse failures) is
+unusual enough to flag explicitly: that's not "weak signal," it's
+suspiciously uniform, consistent with the model giving a similar answer
+regardless of the transcript rather than genuinely splitting 50/50 on
+this dataset. Worth inspecting the raw responses in the dashboard before
+trusting this number as a real "no eval-awareness" result.
+
+![Per-probe AUROC grouped by probe](output/charts/04_probe_grouped_bar.png)
+
+### Interactive dashboard
+
+`dashboard/` is a React + TypeScript + Vite app for browsing every
+transcript's prompt, reasoning trace, final answer, and per-probe
+verbalized results side by side — reads live from this directory's
+`output/api/*` (no rebuild needed after adding a model, just refresh the
+browser). See `dashboard/` for setup; quick start:
+
+```bash
+cd dashboard
+npm install   # first time only
+npm run dev
 ```
 
 ## Known deviations from plan.md
