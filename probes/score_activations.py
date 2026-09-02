@@ -49,6 +49,7 @@ def main() -> None:
     ap.add_argument("--activations-dir", required=True, type=Path)
     ap.add_argument("--dataset", required=True, type=Path)
     ap.add_argument("--out", required=True, type=Path)
+    ap.add_argument("--model-key", default=None, help="label for output metadata; defaults to probe's model_path")
     args = ap.parse_args()
 
     probe = torch.load(args.probe, map_location="cpu")
@@ -112,7 +113,7 @@ def main() -> None:
         prompt_ids=np.array(prompt_ids, dtype=np.int64),
         n_layers=n_layers_act,
         n_random=n_random,
-        model_key="qwen3_8b",
+        model_key=args.model_key or probe["metadata"]["model_path"],
     )
     print(f"Wrote {len(dataset)} rows x {n_layers_act} layers to {args.out}")
 
