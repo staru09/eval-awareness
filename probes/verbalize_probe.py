@@ -141,21 +141,37 @@ def main() -> None:
 
         for t in transcripts:
             assistant_reply = t["final_answer"]
-            for pq in probe_questions:
-                followup_prompt = build_followup_prompt(
-                    tok, spec, t["prompt_text"], assistant_reply, pq["template_text"]
+            # Batch all of this transcript's probe questions into one
+            # generate() call instead of one call per probe -- they're
+            # independent follow-up turns sharing nothing but the model, so
+            # there's no reason to serialize them. load_hf_model() already
+            # sets padding_side="left", which is what makes this safe: every
+            # row in the batch has the same total (padded) input length, so
+            # gen_out[i, input_len:] is the right slice for every row
+            # regardless of that row's real prompt length. Wall-clock for
+            # the batch is bounded by its single longest response, not the
+            # sum of all 5 -- a real speedup when the GPU has headroom
+            # (confirmed idle at ~58% util / 40GB+ free running one probe
+            # at a time).
+            followup_prompts = [
+                build_followup_prompt(tok, spec, t["prompt_text"], assistant_reply, pq["template_text"])
+                for pq in probe_questions
+            ]
+            inputs = tok(
+                followup_prompts, return_tensors="pt", add_special_tokens=False, padding=True
+            ).to(model.device)
+            with torch.no_grad():
+                gen_out = model.generate(
+                    **inputs,
+                    max_new_tokens=args.max_new_tokens,
+                    do_sample=args.temperature > 0,
+                    temperature=max(args.temperature, 1e-5),
+                    top_p=args.top_p,
+                    pad_token_id=tok.pad_token_id,
                 )
-                inputs = tok(followup_prompt, return_tensors="pt", add_special_tokens=False).to(model.device)
-                with torch.no_grad():
-                    gen_out = model.generate(
-                        **inputs,
-                        max_new_tokens=args.max_new_tokens,
-                        do_sample=args.temperature > 0,
-                        temperature=max(args.temperature, 1e-5),
-                        top_p=args.top_p,
-                        pad_token_id=tok.pad_token_id,
-                    )
-                gen_ids = gen_out[0, inputs["input_ids"].shape[1]:]
+            input_len = inputs["input_ids"].shape[1]
+            for i, pq in enumerate(probe_questions):
+                gen_ids = gen_out[i, input_len:]
                 raw_response = tok.decode(gen_ids, skip_special_tokens=True)
 
                 eval_signal, parse_status = resolve_answer(
