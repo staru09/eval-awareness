@@ -1,18 +1,38 @@
-# Qwen3-8B Evaluation-Awareness Experiment
+# LLM Evaluation-Awareness Experiments
 
-Standalone pipeline (see `plan.md` for full context/rationale) that:
+A standalone pipeline for measuring whether language models can tell
+they're being evaluated — and whether they say so. What started as a
+single-model (Qwen3-8B) pilot has grown into two general phases, run
+across many models:
+
+- **Phase 1 — verbalized eval-awareness** (this README, `plan.md`): ask a
+  model directly whether a transcript was an evaluation, across 5
+  independently worded probes. Runs against **any** model — self-hosted
+  via vLLM, via OpenAI/Anthropic's APIs, or via plain HF `transformers` as
+  a fallback when a model's architecture isn't supported by the installed
+  vLLM version. Currently run against **9 models**: see
+  [Results](#results-verbalized-eval-awareness-9-models) below.
+- **Phase 2 — internal representation, coupling, and causal steering**
+  (`plan2.md`, `PROGRESS.md`): does a model represent "this is an
+  evaluation" in its activations even when it doesn't say so? Follows the
+  methodology of Heidari, Memarian & Rabusseau, *"Evaluation Awareness in
+  Language Models: Representation, Verbalization, and Control"*
+  (arXiv:2608.21766), run against 3 of the 9 models. See
+  [Internal representation, coupling, and steering](#internal-representation-coupling-and-steering-phase-2)
+  below for a summary, `plan2.md` for the full experimental design, or
+  `explainer.md` for a plain-language walkthrough of the whole project
+  (no ML background assumed).
+
+The Phase 1 pipeline:
 
 1. Builds a small mixed eval/deploy dataset (`data/build_dataset.py`).
-2. Runs Qwen3-8B inference over it via plain HF `transformers`, capturing
-   reasoning traces and hidden-state activations (`inference/run_inference.py`).
-3. Computes an internal linear-probe direction from 16 contrastive pairs
-   and scores the transcripts' activations against it
-   (`probes/compute_probe.py`, `probes/score_activations.py`,
-   `analysis/classify_auroc.py`).
-4. Asks Qwen3-8B to verbalize whether each transcript was an evaluation,
+2. Runs a model over it — locally via HF `transformers`
+   (`inference/run_inference.py`, any `--model-path`), self-hosted via
+   vLLM, or via a provider API (`inference/run_inference_api.py`) —
+   capturing reasoning traces (and, for the local-HF path, hidden-state
+   activations).
+3. Asks the model to verbalize whether each transcript was an evaluation,
    across 5 probe-question phrasings (`probes/verbalize_probe.py`).
-5. Compares internal vs. stated (verbalized) eval-awareness
-   (`analysis/compare_internal_vs_verbal.py`).
 
 No `inspect_ai` dependency anywhere — one HF code path for generation,
 judging, and hidden-state extraction, matching
@@ -23,47 +43,62 @@ comparable.
 
 ```
 eval-awareness/
-├── plan.md                        # full design rationale
-├── run.sh                         # orchestrates steps 0-5 end-to-end
+├── plan.md                        # Phase 1 design rationale
+├── plan2.md                       # Phase 2 design rationale (3 experiments + why)
+├── PROGRESS.md                    # running log: every model run, bug found, and result (local, not committed)
+├── explainer.md                   # plain-language walkthrough of the whole project
+├── run.sh                         # single-model local-HF pipeline (any --model-path, default Qwen3-8B)
 ├── data/
-│   ├── build_dataset.py           # step 0
+│   ├── build_dataset.py           # assembles the 20-transcript eval/deploy dataset
 │   ├── dataset.json                # 20 transcripts (10 eval, 10 deploy)
-│   └── contrastive_pairs_16.txt   # copied from cls_corr_mi/data/
+│   └── contrastive_pairs_16.txt   # 16 deploy-vs-eval-framed pairs, copied from cls_corr_mi/data/
 ├── inference/
-│   ├── model_utils.py             # HF load/chat-template helpers
-│   ├── run_inference.py           # local Qwen3-8B: generation + activation capture
-│   ├── api_clients.py             # OpenAI/Anthropic provider adapters (reads .env)
-│   ├── run_inference_api.py       # single OpenAI/Anthropic model: generation + verbalized probing
+│   ├── model_utils.py             # HF load/chat-template helpers (any --model-path)
+│   ├── run_inference.py           # local HF: generation + hidden-state activation capture
+│   ├── api_clients.py             # OpenAI/Anthropic/vLLM provider adapters (reads .env)
+│   ├── run_inference_api.py       # single API/vLLM model: generation + verbalized probing
 │   └── run_benchmark.py           # multi-model runner: logs + aggregated summary
 ├── probes/
-│   ├── compute_probe.py           # step 1: 16-pair direction + random controls
-│   ├── score_activations.py       # step 2: project saved activations onto probe
+│   ├── compute_probe.py           # Phase 2 Exp.1: 16-pair direction + random controls, per layer
+│   ├── score_activations.py       # Phase 2 Exp.1: project saved activations onto probe
+│   ├── steer.py                   # Phase 2 Exp.3: activation steering (Contrastive Activation Addition)
+│   ├── run_internal_pipeline.sh   # orchestrates compute_probe -> run_inference -> score_activations
+│   │                               # -> classify_auroc for one model (Phase 2 Exp.1)
 │   ├── probe_questions.yaml       # 5 verbalized-probe phrasings (ported from eval-aware-oss)
-│   └── verbalize_probe.py         # step 4: verbalized probing + label parsing
+│   └── verbalize_probe.py         # verbalized probing + label parsing (shared by both phases)
 ├── analysis/
-│   ├── classify_auroc.py          # step 3: internal-probe AUROC (n=20, LOO accuracy)
-│   └── compare_internal_vs_verbal.py  # step 5: internal vs. verbalized comparison
+│   ├── classify_auroc.py          # Phase 2 Exp.1: internal-probe AUROC (n=20, LOO accuracy)
+│   ├── compare_internal_vs_verbal.py  # Phase 2 Exp.2: internal-vs-verbalized coupling (rho, MI)
+│   ├── plot_results.py            # Phase 1 charts (ensemble AUROC, per-probe heatmap/lines)
+│   ├── plot_internal_results.py   # Phase 2 Exp.1 charts
+│   ├── plot_coupling.py           # Phase 2 Exp.2 charts
+│   └── plot_steering.py           # Phase 2 Exp.3 charts
 ├── judges/
-│   └── gpt_judge.py               # step 6 (optional): GPT reads Qwen3's <think>
-│                                   # trace + verbalized answers, diagnoses cues
+│   └── gpt_judge.py               # optional qualitative pass: GPT reads a model's own
+│                                   # reasoning trace + verbalized answers, diagnoses cues
+├── dashboard/                     # React+TS+Vite app, live view of every transcript/model
 └── output/                        # run artifacts (git-ignored; created at runtime)
+    ├── api/                       # Phase 1: one folder per model (reasoning traces, verbalized CSV/AUROC)
+    ├── local/                     # Phase 2: one folder per model (activations, probe.pt, all 3 experiments' results)
+    └── charts/                    # every generated plot, numbered by which script made it
 ```
 
 ## Requirements
 
-CUDA GPU with ~16GB+ VRAM for Qwen3-8B in bf16 (single GPU; `device_map="auto"`
-shards automatically if more are available). Package management uses `uv`
-throughout (`uv sync`, `uv run python ...`) — see this workspace's
-package-management convention. `torch`/`transformers`/`accelerate`/`numpy`/
-`scikit-learn`/`scipy`/`pyyaml`/`datasets` are required; none of this has
-been run/tested in this environment (no GPU/torch available here) — verify
-on your GPU machine before trusting the numbers.
+A CUDA GPU for the local-HF path (`run_inference.py`, `probes/`) — VRAM
+scales with the model (~16GB for Qwen3-8B in bf16; single GPU,
+`device_map="auto"` shards across more if available). The API/vLLM path
+(`run_inference_api.py`) needs no local GPU at all. Package management
+uses `uv` throughout (`uv sync`, `uv run python ...`) — see this
+workspace's package-management convention.
+`torch`/`transformers`/`accelerate`/`numpy`/`scikit-learn`/`scipy`/`pyyaml`/`datasets`
+are required for the local-HF path.
 
 ## Running
 
 ```bash
 uv sync   # once you have a pyproject.toml/lockfile for this dependency set
-./run.sh
+./run.sh --model-path Qwen/Qwen3-8B   # or any other local HF model
 ```
 
 Or step by step (see `run.sh` for the exact commands/paths), e.g. for a
@@ -71,15 +106,18 @@ quick generation-only smoke test before running the full pipeline:
 
 ```bash
 cd inference
-uv run python run_inference.py --limit 2 --no-hidden-states
+uv run python run_inference.py --model-path Qwen/Qwen3-8B --limit 2 --no-hidden-states
 ```
 
 ## Running the benchmark on OpenAI / Anthropic / vLLM models
 
 `inference/run_inference_api.py` is a drop-in alternative to
 `run_inference.py` for API (or API-shaped) models — they expose no hidden
-states, so it covers generation + verbalized probing only (no internal
-linear-probe steps 1-3, which are Qwen3-8B/HF-only). It reuses
+states, so it covers generation + verbalized probing only (Phase 1). The
+internal-representation/coupling/steering experiments (Phase 2, see
+`plan2.md`) need raw hidden-state access, so they run only against the
+local-HF path (`run_inference.py`, any `--model-path` — not tied to
+Qwen3-8B, just whatever model you point it at). It reuses
 `probes/verbalize_probe.py`'s exact label-parsing logic and
 `probes/probe_questions.yaml`, and writes the same `reasoning_traces.json`
 schema as `run_inference.py` (so `judges/gpt_judge.py` works unmodified on
@@ -342,6 +380,52 @@ cd dashboard
 npm install   # first time only
 npm run dev
 ```
+
+## Internal representation, coupling, and steering (Phase 2)
+
+Phase 1 (above) only measures what a model *says* when asked directly.
+Phase 2 asks a different question: does the model represent "this is an
+evaluation" *internally*, in its activations, even when it never says so?
+Full design rationale in `plan2.md`; a no-ML-background walkthrough of
+the whole idea (with a running analogy) in `explainer.md`; the full
+run-by-run log, every bug found and fixed, and the final numbers in
+`PROGRESS.md`. Run against 3 models chosen as a contrast set from Phase
+1's results: **Qwen3-8B** (strongest verbalizer), **granite-4.2-30b**
+(weakest non-degenerate verbalizer), and **Qwen3.6-27B-OBLITERATED**
+(verbalizes at exactly chance).
+
+Three experiments, each building on the last:
+
+1. **Internal representation** (`probes/compute_probe.py` +
+   `probes/score_activations.py` + `analysis/classify_auroc.py`,
+   orchestrated by `probes/run_internal_pipeline.sh`): build a linear
+   probe direction per layer from 16 contrastive prompt pairs, project
+   each transcript's activations onto it, and check whether the
+   projection separates eval from deploy transcripts (AUROC), against a
+   random-direction control. All 3 models clear or approach the source
+   paper's 0.7 benchmark at their best layer.
+2. **Internal-vs-verbalized coupling** (`analysis/compare_internal_vs_verbal.py`):
+   does the internal signal actually correlate, transcript-by-transcript,
+   with what the model says out loud? Spearman correlation + mutual
+   information, again against a random-direction control. Diverges from
+   the source paper here — our correlations run 3-4x higher — for a
+   verified, non-bug reason documented in `PROGRESS.md`.
+3. **Activation steering** (`probes/steer.py`): the causal test — does
+   physically nudging the internal signal during generation change what
+   the model says? Contrastive Activation Addition via a forward hook,
+   swept across layers and steering strengths.
+
+The standout result: Qwen3.6-27B-OBLITERATED internally separates
+eval-vs-deploy almost as well as Qwen3-8B (0.88 AUROC) while its
+verbalized answer sits at exactly chance — the cleanest "knows
+internally, says nothing" case in the dataset, and sharper than any
+single model in the source paper's own six-model sample. Charts:
+`output/charts/05_*` through `10_*` (`analysis/plot_internal_results.py`,
+`plot_coupling.py`, `plot_steering.py`).
+
+A full LaTeX writeup of both phases (methodology, results tables, and all
+14 charts, ready to upload to Overleaf) is at
+`eval_awareness_report.zip`.
 
 ## Known deviations from plan.md
 
