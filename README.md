@@ -12,16 +12,14 @@ across many models:
   a fallback when a model's architecture isn't supported by the installed
   vLLM version. Currently run against **9 models**: see
   [Results](#results-verbalized-eval-awareness-9-models) below.
-- **Phase 2 — internal representation, coupling, and causal steering**
-  (`plan2.md`, `PROGRESS.md`): does a model represent "this is an
-  evaluation" in its activations even when it doesn't say so? Follows the
-  methodology of Heidari, Memarian & Rabusseau, *"Evaluation Awareness in
-  Language Models: Representation, Verbalization, and Control"*
-  (arXiv:2608.21766), run against 3 of the 9 models. See
+- **Phase 2 — internal representation, coupling, and causal steering**: does
+  a model represent "this is an evaluation" in its activations even when
+  it doesn't say so? Follows the methodology of Heidari, Memarian &
+  Rabusseau, *"Evaluation Awareness in Language Models: Representation,
+  Verbalization, and Control"* (arXiv:2608.21766), run against 3 of the 9
+  models. See
   [Internal representation, coupling, and steering](#internal-representation-coupling-and-steering-phase-2)
-  below for a summary, `plan2.md` for the full experimental design, or
-  `explainer.md` for a plain-language walkthrough of the whole project
-  (no ML background assumed).
+  and [Conclusion](#conclusion) below for the full rationale and results.
 
 The Phase 1 pipeline:
 
@@ -39,14 +37,15 @@ judging, and hidden-state extraction, matching
 `../evaluation-awareness/cls_corr_mi`'s conventions so results stay directly
 comparable.
 
-## Layout
+## Layout (committed files only)
+
+`output/` is git-ignored except for the generated chart PNGs (checked in
+so they render on GitHub); everything else under it (`output/api/`,
+`output/local/`, `output/logs/`) is created at runtime and stays local.
 
 ```
 eval-awareness/
 ├── plan.md                        # Phase 1 design rationale
-├── plan2.md                       # Phase 2 design rationale (3 experiments + why)
-├── PROGRESS.md                    # running log: every model run, bug found, and result (local, not committed)
-├── explainer.md                   # plain-language walkthrough of the whole project
 ├── run.sh                         # single-model local-HF pipeline (any --model-path, default Qwen3-8B)
 ├── data/
 │   ├── build_dataset.py           # assembles the 20-transcript eval/deploy dataset
@@ -76,11 +75,11 @@ eval-awareness/
 ├── judges/
 │   └── gpt_judge.py               # optional qualitative pass: GPT reads a model's own
 │                                   # reasoning trace + verbalized answers, diagnoses cues
-├── dashboard/                     # React+TS+Vite app, live view of every transcript/model
-└── output/                        # run artifacts (git-ignored; created at runtime)
-    ├── api/                       # Phase 1: one folder per model (reasoning traces, verbalized CSV/AUROC)
-    ├── local/                     # Phase 2: one folder per model (activations, probe.pt, all 3 experiments' results)
-    └── charts/                    # every generated plot, numbered by which script made it
+├── dashboard/                     # React+TS+Vite app, static build deployed to GitHub Pages
+│   └── src/data/dashboard_data.json  # bundled snapshot of output/api/* (npm run aggregate)
+├── .github/workflows/
+│   └── deploy-dashboard.yml       # builds dashboard/ and deploys it to GitHub Pages on push to master
+└── output/charts/                 # the 14 generated plots referenced below (only committed part of output/)
 ```
 
 ## Requirements
@@ -114,8 +113,8 @@ uv run python run_inference.py --model-path Qwen/Qwen3-8B --limit 2 --no-hidden-
 `inference/run_inference_api.py` is a drop-in alternative to
 `run_inference.py` for API (or API-shaped) models — they expose no hidden
 states, so it covers generation + verbalized probing only (Phase 1). The
-internal-representation/coupling/steering experiments (Phase 2, see
-`plan2.md`) need raw hidden-state access, so they run only against the
+internal-representation/coupling/steering experiments (Phase 2) need raw
+hidden-state access, so they run only against the
 local-HF path (`run_inference.py`, any `--model-path` — not tied to
 Qwen3-8B, just whatever model you point it at). It reuses
 `probes/verbalize_probe.py`'s exact label-parsing logic and
@@ -371,13 +370,15 @@ trusting this number as a real "no eval-awareness" result.
 
 `dashboard/` is a React + TypeScript + Vite app for browsing every
 transcript's prompt, reasoning trace, final answer, and per-probe
-verbalized results side by side — reads live from this directory's
-`output/api/*` (no rebuild needed after adding a model, just refresh the
-browser). See `dashboard/` for setup; quick start:
+verbalized results side by side — a static build, data bundled at build
+time from `output/api/*` (`npm run aggregate`), deployed to GitHub Pages
+via `.github/workflows/deploy-dashboard.yml`. See `dashboard/` for setup;
+quick start:
 
 ```bash
 cd dashboard
-npm install   # first time only
+npm install       # first time only
+npm run aggregate # refresh dashboard/src/data/dashboard_data.json from output/api/*
 npm run dev
 ```
 
@@ -386,10 +387,7 @@ npm run dev
 Phase 1 (above) only measures what a model *says* when asked directly.
 Phase 2 asks a different question: does the model represent "this is an
 evaluation" *internally*, in its activations, even when it never says so?
-Full design rationale in `plan2.md`; a no-ML-background walkthrough of
-the whole idea (with a running analogy) in `explainer.md`; the full
-run-by-run log, every bug found and fixed, and the final numbers in
-`PROGRESS.md`. Run against 3 models chosen as a contrast set from Phase
+Run against 3 models chosen as a contrast set from Phase
 1's results: **Qwen3-8B** (strongest verbalizer), **granite-4.2-30b**
 (weakest non-degenerate verbalizer), and **Qwen3.6-27B-OBLITERATED**
 (verbalizes at exactly chance).
@@ -409,7 +407,7 @@ Three experiments, each building on the last:
    with what the model says out loud? Spearman correlation + mutual
    information, again against a random-direction control. Diverges from
    the source paper here — our correlations run 3-4x higher — for a
-   verified, non-bug reason documented in `PROGRESS.md`.
+   verified, non-bug reason (see [Conclusion](#conclusion) below).
 3. **Activation steering** (`probes/steer.py`): the causal test — does
    physically nudging the internal signal during generation change what
    the model says? Contrastive Activation Addition via a forward hook,
@@ -423,9 +421,51 @@ single model in the source paper's own six-model sample. Charts:
 `output/charts/05_*` through `10_*` (`analysis/plot_internal_results.py`,
 `plot_coupling.py`, `plot_steering.py`).
 
-A full LaTeX writeup of both phases (methodology, results tables, and all
-14 charts, ready to upload to Overleaf) is at
-`eval_awareness_report.zip`.
+## Charts (`output/charts/`)
+
+| File | Shows |
+|---|---|
+| `01_ensemble_auroc_bar.png` | Ensemble verbalized AUROC per model, bar chart. |
+| `02_probe_heatmap.png` | Model x probe-phrasing AUROC heatmap. |
+| `03_probe_lines.png` | AUROC per probe phrasing, one line per model. |
+| `04_probe_grouped_bar.png` | AUROC per probe phrasing, grouped bar by model. |
+| `05_internal_auroc_layers_last.png` | Exp.1: per-layer internal-probe AUROC, last-token readout, vs. random-direction control. |
+| `05_internal_auroc_layers_mean.png` | Exp.1: same, mean-token readout. |
+| `06_internal_auroc_peak_summary.png` | Exp.1: each model's peak-layer internal AUROC vs. its verbalized AUROC. |
+| `07_coupling_layers_last_rho.png` | Exp.2: per-layer Spearman ρ between internal and verbalized signal, last-token. |
+| `07_coupling_layers_last_mi.png` | Exp.2: same, mutual information (nats), last-token. |
+| `07_coupling_layers_mean_rho.png` / `07_coupling_layers_mean_mi.png` | Exp.2: same two, mean-token readout. |
+| `08_coupling_peak_summary.png` | Exp.2: each model's peak coupling strength, one bar per model. |
+| `09_steering_effect.png` | Exp.3: per-layer change in verbalized eval_signal, one line per steering strength (alpha). |
+| `10_steering_peak_summary.png` | Exp.3: each model's largest observed steering effect, summarized. |
+
+## Conclusion
+
+- **Models often represent "this is an evaluation" internally, well above
+  chance.** A simple per-layer linear probe on the residual-stream
+  activations separates eval- from deploy-framed transcripts (AUROC
+  0.73-0.98) for every model tested this way (Qwen3-8B, granite-4.2-30b,
+  Qwen3.6-27B-OBLITERATED) — replicating the source paper's core claim.
+- **What a model says and what it internally represents are only loosely
+  related, but not for the paper's reason.** The source paper found
+  internal and verbalized signal nearly decoupled (|ρ| < 0.19). We found
+  much higher correlation (up to 0.64) — traced to a confound, not a
+  contradiction: our verbalized probes are direct questions the models
+  mostly answer correctly, so both signals separately track ground truth
+  and therefore correlate with each other through that shared cause, not
+  because internal state leaks into speech.
+- **The standout single result:** Qwen3.6-27B-OBLITERATED internally
+  separates eval vs. deploy almost as well as Qwen3-8B (0.88 AUROC) while
+  verbalizing nothing about it — it answers "not an evaluation" identically
+  on all 100 verbalized-probe calls regardless of the true label. The
+  cleanest "knows internally, says nothing" case in the dataset.
+- **Steering didn't produce a clean, consistent effect for any model** —
+  matching a limitation the source paper itself reports, not a
+  setup-specific failure.
+- **Bottom line:** eval-awareness is real and measurable inside model
+  activations, is inconsistently (sometimes not at all) verbalized, and
+  isn't reliably steerable via a simple linear direction — models can
+  "know" without telling, and telling doesn't cleanly track knowing.
 
 ## Known deviations from plan.md
 
