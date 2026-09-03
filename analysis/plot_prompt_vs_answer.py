@@ -291,6 +291,81 @@ def plot_null_controls(by_pooling: dict[str, dict[str, dict[str, dict]]]) -> Non
     print("  wrote 13_probe_null_controls.png")
 
 
+def plot_band_statistic(by_pooling: dict[str, dict[str, dict[str, dict]]]) -> None:
+    """Chart 14: the argmax statistic vs the band statistic, with both nulls.
+
+    Chart 13 shows every cell failing the random-direction null. The reason is
+    the statistic, not the data: at n=20 a random direction's per-layer AUROC
+    has |AUROC-0.5| ~ 0.16-0.23 and adjacent layers are near-independent
+    (measured correlation 0.00-0.03), so argmax over 36-64 layers reaches ~0.9
+    under the null. Requiring a coherent 3-layer band -- which a real
+    representation should produce and a random direction should not -- recovers
+    signal in three cells against 1000 fresh random directions.
+    """
+    rows = []
+    for pooling, results in by_pooling.items():
+        for slug, got in results.items():
+            for readout, key in (("prompt only", "prompt_null"), ("prompt + answer", "answer_null")):
+                null = got.get(key)
+                if not null or not null.get("band_statistic"):
+                    continue
+                b = null["band_statistic"]
+                fr = b["fresh_random_directions"]
+                if not fr:
+                    continue
+                rows.append({
+                    "label": f"{SLUG_LABELS[slug]}\n{readout}, {pooling}-token",
+                    "color": COLORS.get(SLUG_LABELS[slug], "#666666"),
+                    "argmax": null["real"]["peak_auroc"],
+                    "band": b["real"]["band_auroc"],
+                    "band_layer": b["real"]["band_start_layer"],
+                    "rand_mean": fr["mean"],
+                    "rand_p": fr["empirical_p"],
+                    "perm_p95": b["label_permutation"]["p95"],
+                    "perm_p": b["label_permutation"]["empirical_p"],
+                })
+    if not rows:
+        return
+    rows.sort(key=lambda r: r["perm_p"])
+
+    fig, ax = plt.subplots(figsize=(11.5, 0.52 * len(rows) + 2.4))
+    y = np.arange(len(rows))[::-1]
+    h = 0.34
+    ax.barh(y + h / 2, [r["band"] for r in rows], height=h,
+            color=[r["color"] for r in rows], zorder=3, label="band statistic (3-layer)")
+    ax.barh(y - h / 2, [r["argmax"] for r in rows], height=h,
+            color=[r["color"] for r in rows], alpha=0.35, zorder=3, label="argmax statistic (single layer)")
+    ax.scatter([r["rand_mean"] for r in rows], y + h / 2, marker="s", s=32, color=MUTED,
+               zorder=5, label="1000 random directions, mean band")
+    for yi, r in zip(y, rows):
+        ax.plot([r["perm_p95"], r["perm_p95"]], [yi + h / 2 - 0.17, yi + h / 2 + 0.17],
+                color=WARN, linewidth=2, zorder=6)
+        passes = r["perm_p"] < 0.05 and r["rand_p"] < 0.05
+        ax.text(1.015, yi, f"perm {r['perm_p']:.3f} / rand {r['rand_p']:.3f}", va="center",
+                fontsize=8, color=WARN if passes else MUTED,
+                fontweight="bold" if passes else "normal")
+    ax.plot([], [], color=WARN, linewidth=2, label="label-permutation null, p95 (band)")
+
+    ax.set_yticks(y, [r["label"] for r in rows], fontsize=8.5)
+    ax.set_xlim(0, 1.28)
+    ax.set_ylim(y.min() - 0.7, y.max() + 1.7)
+    ax.set_xticks([0, 0.25, 0.5, 0.75, 1.0])
+    ax.set_xlabel("AUROC (eval vs. deploy)")
+    ax.grid(axis="x", color=GRID, zorder=0)
+    ax.spines[["top", "right", "left"]].set_visible(False)
+    ax.legend(loc="upper left", bbox_to_anchor=(0.0, 1.0), frameon=False,
+              fontsize=8.5, ncol=2, columnspacing=1.4, handletextpad=0.5)
+    fig.suptitle(
+        "Requiring a coherent 3-layer band instead of a single best layer\n"
+        "three cells clear both nulls; the argmax statistic cleared neither",
+        x=0.02, ha="left", fontsize=12.5, fontweight="bold", color=INK,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.savefig(OUT_DIR / "14_band_statistic.png", dpi=200)
+    plt.close(fig)
+    print("  wrote 14_band_statistic.png")
+
+
 def main() -> None:
     by_pooling = {}
     for pooling in ("last", "mean"):
@@ -307,6 +382,7 @@ def main() -> None:
         )
     plot_peaks(by_pooling)
     plot_null_controls(by_pooling)
+    plot_band_statistic(by_pooling)
     print(f"Wrote charts to {OUT_DIR}")
 
 

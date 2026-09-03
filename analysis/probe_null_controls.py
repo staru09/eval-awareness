@@ -105,6 +105,86 @@ def peaks_from_ranks(ranks: np.ndarray, label_matrix: np.ndarray) -> np.ndarray:
     return aurocs.max(axis=1)
 
 
+
+def band_stat(aurocs: np.ndarray, width: int) -> tuple[float, int]:
+    """Best `width`-layer moving average of per-layer AUROC, and its start layer.
+
+    Motivation: at n=20 the per-layer AUROC of a *random* direction has
+    |AUROC - 0.5| ~ 0.16-0.23, and adjacent layers are near-independent
+    (measured adjacent-layer correlation of random projections: 0.00-0.03).
+    So max-over-36-to-64-layers is ~40 independent lottery tickets and
+    reaches ~0.9 under the null -- which is why the argmax statistic finds
+    nothing anywhere. A genuine representation, by contrast, should persist
+    across neighbouring layers, and a random direction has no reason to.
+    Requiring a coherent band instead of a lone spike is therefore both
+    better powered and better motivated.
+
+    NOTE this statistic was adopted *after* the argmax analysis returned
+    null, so it is a post-hoc choice. It is applied uniformly to every
+    model x readout x pooling cell with identical nulls, not only to the
+    cells that pass -- but it should be reported as post-hoc.
+    """
+    if width <= 1 or aurocs.size < width:
+        l = int(np.argmax(aurocs))
+        return float(aurocs[l]), l
+    kernel = np.ones(width) / width
+    smoothed = np.convolve(aurocs, kernel, mode="valid")
+    l = int(np.argmax(smoothed))
+    return float(smoothed[l]), l
+
+
+def auroc_matrix(ranks: np.ndarray, label_matrix: np.ndarray) -> np.ndarray:
+    """[P, L] per-layer AUROC for P label vectors at once, via the rank-sum
+    identity (see peaks_from_ranks). Exact match to sklearn including ties."""
+    n_pos = label_matrix.sum(axis=1)
+    n_neg = label_matrix.shape[1] - n_pos
+    return (label_matrix @ ranks - (n_pos * (n_pos + 1) / 2)[:, None]) / (n_pos * n_neg)[:, None]
+
+
+def bands_from_auroc_matrix(A: np.ndarray, width: int) -> np.ndarray:
+    """[P] best `width`-layer moving average for each row of a [P, L] matrix."""
+    if width <= 1 or A.shape[1] < width:
+        return A.max(axis=1)
+    kernel = np.ones(width) / width
+    return np.apply_along_axis(lambda r: np.convolve(r, kernel, mode="valid"), 1, A).max(axis=1)
+
+
+def per_layer_aurocs(scores_2d: np.ndarray, labels: np.ndarray) -> np.ndarray:
+    return auroc_matrix(_layer_ranks(scores_2d), labels.astype(float)[None, :])[0]
+
+
+def fresh_random_band_null(act_dir: Path, ids: list[str], pooling: str, labels: np.ndarray,
+                           width: int, n_dirs: int, seed: int) -> np.ndarray | None:
+    """Band statistic for `n_dirs` fresh random unit directions per layer.
+
+    probe.pt only stores R=10 controls, which floors the empirical p-value at
+    1/11 = 0.091. The activations are on disk, so drawing hundreds more costs
+    one einsum and turns that floor into a real p-value.
+    """
+    key = "last_token" if pooling == "last" else "mean_token"
+    mats = []
+    for tid in ids:
+        p = act_dir / f"{tid}.npz"
+        if not p.exists():
+            return None
+        with np.load(p) as z:
+            mats.append(z[key])
+    H = np.stack(mats).astype(np.float32)                 # [N, L, D]
+    _, L, D = H.shape
+    rng = np.random.default_rng(seed)
+    out = np.empty(n_dirs)
+    chunk = 100
+    for s in range(0, n_dirs, chunk):
+        n = min(chunk, n_dirs - s)
+        V = rng.standard_normal((L, D, n)).astype(np.float32)
+        V /= np.linalg.norm(V, axis=1, keepdims=True)
+        P = np.einsum("nld,ldr->nlr", H, V)               # [N, L, n]
+        y1 = labels.astype(float)[None, :]
+        for j in range(n):
+            A = auroc_matrix(_layer_ranks(P[:, :, j]), y1)
+            out[s + j] = bands_from_auroc_matrix(A, width)[0]
+    return out
+
 def activation_norms(act_dir: Path, ids: list[str], pooling: str) -> np.ndarray | None:
     """[N, L] of ||h|| per transcript per layer, or None if unavailable."""
     key = "last_token" if pooling == "last" else "mean_token"
@@ -127,7 +207,11 @@ def main() -> None:
     ap.add_argument("--reasoning-traces", type=Path, default=None,
                     help="enables the prompt-length baseline (reads n_prompt_tokens)")
     ap.add_argument("--pooling", default="last", choices=["last", "mean"])
-    ap.add_argument("--n-perm", type=int, default=2000)
+    ap.add_argument("--n-perm", type=int, default=5000)
+    ap.add_argument("--band-width", type=int, default=3,
+                    help="layers in the coherence band; 1 reproduces the plain argmax statistic")
+    ap.add_argument("--n-fresh-random", type=int, default=1000,
+                    help="fresh random directions for the band null (needs --activations-dir); 0 to skip")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", required=True, type=Path)
     args = ap.parse_args()
@@ -191,6 +275,55 @@ def main() -> None:
         "max": float(perm_peaks.max()),
         "n_beating_real": int((perm_peaks >= real_peak).sum()),
         "empirical_p": float(p_perm),
+    }
+
+    # --- 2b) the same two nulls under the band-coherence statistic --------
+    # The argmax statistic above is badly under-powered at n=20 (see
+    # band_stat's docstring). Recompute everything requiring a coherent
+    # `--band-width`-layer run instead of a single best layer.
+    w = args.band_width
+    real_layer_aurocs = per_layer_aurocs(real, labels)
+    band_real, band_layer = band_stat(real_layer_aurocs, w)
+
+    band_rand_stored = np.array([
+        band_stat(per_layer_aurocs(rand[:, :, r], labels), w)[0] for r in range(n_random)
+    ])
+    band_perm = bands_from_auroc_matrix(auroc_matrix(ranks, perm_labels), w)
+    p_band_perm = (int((band_perm >= band_real).sum()) + 1) / (len(band_perm) + 1)
+
+    band_fresh = None
+    if args.activations_dir is not None and args.n_fresh_random > 0:
+        band_fresh = fresh_random_band_null(
+            args.activations_dir, ids, args.pooling, labels, w,
+            args.n_fresh_random, args.seed + 991,
+        )
+
+    out["band_statistic"] = {
+        "note": (
+            f"max of a {w}-layer moving average of per-layer AUROC, instead of a "
+            "single best layer. POST-HOC: adopted after the argmax analysis came "
+            "back null. Applied identically to every cell and to every null."
+        ),
+        "band_width": w,
+        "real": {"band_auroc": band_real, "band_start_layer": band_layer,
+                 "per_layer": [float(v) for v in real_layer_aurocs[band_layer:band_layer + w]]},
+        "stored_random_directions": {
+            "n": n_random, "mean": float(band_rand_stored.mean()),
+            "max": float(band_rand_stored.max()),
+            "empirical_p": float((int((band_rand_stored >= band_real).sum()) + 1) / (n_random + 1)),
+        },
+        "fresh_random_directions": None if band_fresh is None else {
+            "n": int(args.n_fresh_random),
+            "mean": float(band_fresh.mean()),
+            "p99": float(np.percentile(band_fresh, 99)),
+            "empirical_p": float((int((band_fresh >= band_real).sum()) + 1) / (len(band_fresh) + 1)),
+        },
+        "label_permutation": {
+            "n": int(len(band_perm)),
+            "mean": float(band_perm.mean()),
+            "p95": float(np.percentile(band_perm, 95)),
+            "empirical_p": float(p_band_perm),
+        },
     }
 
     # --- 3/4) magnitude controls -----------------------------------------
@@ -260,6 +393,11 @@ def main() -> None:
               f"   ||h||-only baseline: {out['norm_only_baseline']['peak_auroc']:.3f}")
     if out["prompt_length_baseline"]:
         print(f"  prompt-length-only baseline AUROC: {out['prompt_length_baseline']['auroc']:.3f}")
+    b = out["band_statistic"]
+    fr = b["fresh_random_directions"]
+    print(f"  BAND (w={b['band_width']}) = {b['real']['band_auroc']:.3f} @L{b['real']['band_start_layer']}"
+          f"  perm p={b['label_permutation']['empirical_p']:.4f}"
+          + (f"  random-dir p={fr['empirical_p']:.4f} (n={fr['n']}, mean={fr['mean']:.3f})" if fr else ""))
     print(f"  MCQ-split peak AUROC: {mcq_peak:.3f}"
           + (f"   format-controlled (n={ctrl['n_eval']}v{ctrl['n_deploy']}): {ctrl['peak_auroc']:.3f}"
              if ctrl else ""))
