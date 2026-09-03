@@ -148,6 +148,31 @@ def generate_followup(model, tok, spec, prompt_text, assistant_reply, pq_templat
     return tok.decode(gen_ids, skip_special_tokens=True)
 
 
+def _glue_negative_values(argv: list[str]) -> list[str]:
+    """Rewrite `--alphas -1.0,-0.5` into `--alphas=-1.0,-0.5` before parsing.
+
+    argparse treats any token starting with '-' as a new option, so the
+    natural spelling of this flag fails with "expected one argument" and
+    exits before loading the model. That is not hypothetical: it killed
+    the original Experiment 3 run, was written up as "caught and fixed",
+    and then killed the first relaunch of that experiment months later,
+    because the earlier fix was only a convention about how to type the
+    command rather than a change to the code. This makes both spellings
+    work, so it cannot happen a third time.
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok in ("--alphas",) and i + 1 < len(argv) and argv[i + 1].startswith("-"):
+            out.append(f"{tok}={argv[i + 1]}")
+            i += 2
+            continue
+        out.append(tok)
+        i += 1
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model-path", default=QWEN3_8B.hf_id)
@@ -165,7 +190,7 @@ def main() -> None:
     ap.add_argument("--top-p", type=float, default=0.9)
     ap.add_argument("--dtype", default="bfloat16", choices=["float16", "bfloat16", "float32"])
     ap.add_argument("--out", required=True, type=Path)
-    args = ap.parse_args()
+    args = ap.parse_args(_glue_negative_values(sys.argv[1:]))
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
