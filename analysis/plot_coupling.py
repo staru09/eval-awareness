@@ -147,44 +147,6 @@ def plot_layer_coupling(results: dict[str, dict[str, dict]], pooling: str, metri
     plt.close(fig)
 
 
-def plot_peak_summary(results: dict[str, dict[str, dict]]) -> None:
-    labels, rho_vals, mi_vals, colors, degenerate = [], [], [], [], []
-    for slug, data in results.items():
-        label = SLUG_LABELS[slug]
-        ens = data.get("last", data.get("mean", {})).get("ensemble", {})
-        labels.append(label)
-        colors.append(COLORS.get(label, "#666666"))
-        is_degenerate = ens.get("degenerate", False)
-        degenerate.append(is_degenerate)
-        rho_vals.append(None if is_degenerate else ens.get("peak_abs_rho"))
-        mi_vals.append(None if is_degenerate else ens.get("peak_mi_nats"))
-
-    y = np.arange(len(labels))
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 0.7 * len(labels) + 1.6))
-
-    for ax, vals, xlabel in ((ax1, rho_vals, "Peak |Spearman rho|"), (ax2, mi_vals, "Peak mutual info (nats)")):
-        for yi, v, c, deg in zip(y, vals, colors, degenerate):
-            if deg:
-                ax.barh([yi], [ax.get_xlim()[1] or 1], height=0.55, color=GRID, zorder=2)
-                ax.text(0.02, yi, "undefined (constant answer)", va="center", fontsize=9, color=MUTED)
-            else:
-                ax.barh([yi], [v], height=0.55, color=c, zorder=3)
-                ax.text(v, yi, f"  {v:.3f}", va="center", fontsize=9.5, fontweight="bold", color=INK)
-        ax.set_yticks(y, labels)
-        ax.set_xlabel(xlabel)
-        ax.grid(axis="x", color=GRID, zorder=0)
-        ax.spines[["top", "right", "left"]].set_visible(False)
-    ax1.set_xlim(0, 1.0)
-
-    fig.suptitle(
-        "Peak internal-vs-verbalized coupling per model (ensemble probe, last-token)",
-        x=0.02, ha="left", fontsize=13, fontweight="bold", color=INK,
-    )
-    fig.tight_layout(rect=(0, 0, 1, 0.9))
-    fig.savefig(OUT_DIR / "08_coupling_peak_summary.png", dpi=200)
-    plt.close(fig)
-
-
 def main() -> None:
     results = load_results()
     print(f"Loaded coupling results for {len(results)} models: {list(results)}")
@@ -193,7 +155,6 @@ def main() -> None:
     for pooling in ("last", "mean"):
         plot_layer_coupling(results, pooling, "rho")
         plot_layer_coupling(results, pooling, "mi")
-    plot_peak_summary(results)
     print(f"Wrote charts to {OUT_DIR}")
 
 

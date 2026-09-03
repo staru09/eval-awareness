@@ -155,30 +155,6 @@ def plot_probe_lines(results: dict[str, dict]) -> None:
     plt.close(fig)
 
 
-def plot_probe_grouped_bar(results: dict[str, dict]) -> None:
-    models = sorted(results.keys(), key=lambda k: -results[k]["summary"]["ensemble_auroc"])
-    n_models = len(models)
-    n_probes = len(PROBE_ORDER)
-    x = np.arange(n_probes)
-    width = 0.8 / n_models
-
-    fig, ax = plt.subplots(figsize=(10, 5.6))
-    for i, model in enumerate(models):
-        y = [results[model]["per_probe"][p]["auroc"] for p in PROBE_ORDER]
-        ax.bar(x + i * width - 0.4 + width / 2, y, width=width * 0.92, color=COLORS[model], label=model, zorder=3)
-    ax.set_xticks(x, [PROBE_LABELS[p] for p in PROBE_ORDER])
-    ax.set_ylim(0, 1.15)
-    ax.set_yticks([0, 0.25, 0.5, 0.75, 1.0])
-    ax.set_ylabel("AUROC")
-    ax.set_title("Per-probe AUROC, grouped by probe", loc="left", fontsize=13, fontweight="bold", color=INK)
-    ax.grid(axis="y", color=GRID, zorder=0)
-    ax.spines[["top", "right"]].set_visible(False)
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.28), ncol=3, frameon=False, fontsize=9.5)
-    fig.tight_layout()
-    fig.savefig(OUT_DIR / "04_probe_grouped_bar.png", dpi=200)
-    plt.close(fig)
-
-
 def main() -> None:
     results = load_results()
     print(f"Loaded results for {len(results)} models: {list(results)}")
@@ -187,8 +163,7 @@ def main() -> None:
     plot_ensemble_bar(results)
     plot_probe_heatmap(results)
     plot_probe_lines(results)
-    plot_probe_grouped_bar(results)
-    print(f"Wrote 4 charts to {OUT_DIR}")
+    print(f"Wrote 3 charts to {OUT_DIR}")
 
 
 if __name__ == "__main__":
