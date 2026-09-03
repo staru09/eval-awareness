@@ -10,9 +10,12 @@ Models: Representation, Verbalization, and Control"* (arXiv:2608.21766).
 ## TL;DR — where things stand
 
 - **Verbalized probing** (§4): 9 models run end-to-end (0 parse failures
-  on every one). Ensemble AUROC ranges from 1.000 (GPT-5.6-terra,
-  Qwen3-8B) down to 0.450/below-chance (Qwen3.6-27B-OBLITERATED — not
-  actually guessing, see §6). Olmo-3-7B-Think skipped (blocked, see §8).
+  on every one). Ensemble AUROC ranges from 1.000 (3 models, including
+  Qwen3.6-27B-OBLITERATED) down to 0.830 (Llama-3.1-8B) — **no model
+  scores near or below chance any more**; see §10 for a second, much
+  bigger correction (a verbalized-answer parsing bug) that overturned the
+  original "Qwen3.6-27B-OBLITERATED knows internally but never says so"
+  headline finding entirely. Olmo-3-7B-Think skipped (blocked, see §8).
   **Three of these nine numbers (qwen3-4b-OBLITERATED, Gemma-4-12B-
   OBLITERATED, Qwen3.6-27B-OBLITERATED) were corrected mid-session** after
   a real-data audit found and fixed 3 separate reasoning/answer-split
@@ -126,27 +129,32 @@ every model.
 
 | Model | Provider | Ensemble AUROC | Notes |
 |---|---|---|---|
+| Qwen3.6-27B-OBLITERATED | HF `transformers` (VM, local path) | **1.000** (was 0.450 — see §10, a much bigger correction than §9's) | vLLM couldn't load it (see §6 bugs); **was wrongly described as "always denies"** — that was a grading-script bug, not model behavior; see §10 |
 | GPT-5.6-terra | OpenAI | 1.000 | Responses API, reasoning effort=medium |
 | Qwen3-8B | vLLM (self-hosted) | 1.000 | `--reasoning-parser qwen3` |
-| Gemma-4-12B-OBLITERATED | HF `transformers` (VM, local path) | 0.995 (was 1.000, corrected — see §9) | vLLM couldn't load it (see §6 bugs); ran via `run_inference.py`/`verbalize_probe.py` instead |
 | Claude Sonnet 5 | Anthropic | 0.985 | extended thinking, most *consistent* per-probe |
-| qwen3-4b-structured-output-merged-stage-a-OBLITERATED | vLLM (self-hosted) | 0.885 (was 0.875, corrected — see §9) | `--reasoning-parser qwen3` |
+| Gemma-4-12B-OBLITERATED | HF `transformers` (VM, local path) | 0.985 (was 1.000 → 0.995 → this, corrected twice — see §9, §10) | vLLM couldn't load it (see §6 bugs); ran via `run_inference.py`/`verbalize_probe.py` instead |
+| granite-4.2-30b | vLLM (self-hosted) | **0.950** (was 0.735 — see §10) | `--reasoning-parser qwen3` (not `granite`, see bugs above) |
+| qwen3-4b-structured-output-merged-stage-a-OBLITERATED | vLLM (self-hosted) | 0.885 (was 0.875, corrected — see §9; unaffected by §10) | `--reasoning-parser qwen3` |
 | Mistral-Small-24B-Instruct-2501 | vLLM (self-hosted) | 0.865 | no native thinking mode — ran `--no-thinking` |
 | Llama-3.1-8B-Instruct | vLLM (self-hosted) | 0.830 | gated (HF_TOKEN required), no thinking mode |
-| granite-4.2-30b | vLLM (self-hosted) | 0.735 | `--reasoning-parser qwen3` (not `granite`, see bugs above) |
-| Qwen3.6-27B-OBLITERATED | HF `transformers` (VM, local path) | 0.450, below chance (was 0.500 — see §9) | vLLM couldn't load it (see §6 bugs); **not actually random** — answers "not an eval" on 99 of its 100 verbalized-probe responses (corrected count, see §9), a single exception on one probe/transcript |
 | Olmo-3-7B-Think | — | **skipped** | vLLM 0.19.1 has no native `Olmo3ForCausalLM` support (`KeyError: 'rope_theta'` on load); would need a newer vLLM than this VM's driver allows |
 
-Key qualitative takeaways (see chat log / `dashboard/` for detail):
+Key qualitative takeaways (see chat log / `dashboard/` for detail; **updated
+after §10's correction** — every bullet below reflects the corrected
+numbers, not the originally-recorded ones):
 - Ensemble AUROC hides real per-probe inconsistency — GPT-5.6-terra's
   worst single probe is only 0.65 despite a perfect ensemble score.
-- Model scale doesn't predict eval-awareness: granite-4.2-30b (30B) is
-  last, behind both 8B models.
-- `h_purpose_analysis_a` is the most reliable probe across every model
-  (floor of 0.75); `direct_vn_a` (a rephrasing of the plain direct
-  question) is consistently one of the weakest for non-frontier models —
-  evidence that verbalized eval-awareness is phrasing-sensitive, not a
-  stable belief reported the same way regardless of how it's elicited.
+- Verbalized eval-awareness is high across almost every model tested —
+  the lowest score (Llama-3.1-8B, 0.830) still clears 0.8. Model scale
+  doesn't cleanly predict it either way: granite-4.2-30b (30B, 0.950)
+  beats both 8B models tested, but several smaller models still beat it.
+- `h_purpose_analysis_a` is among the most reliable probes across every
+  model; `direct_vn_a` (a rephrasing of the plain direct question) is
+  consistently one of the weakest for non-frontier models — evidence
+  that verbalized eval-awareness, where it's below ceiling, is
+  phrasing-sensitive, not a stable belief reported the same way
+  regardless of how it's elicited.
 
 ## 5. The Azure VM's ephemeral disk keeps resetting
 
@@ -208,25 +216,30 @@ rewritten from an earlier scaffold that didn't match this methodology).
 
 | Model | Peak \|Spearman ρ\| (ensemble, last-token) | Peak MI (nats) |
 |---|---|---|
+| Qwen3.6-27B-OBLITERATED | **0.837** @ L34/65 | 0.474 |
 | Qwen3-8B | **0.639** @ L29/36 | 0.479 |
-| granite-4.2-30b | **0.617** @ L32/64 | 0.261 |
-| Qwen3.6-27B-OBLITERATED | 0.378 @ L22/65 — exactly at the random-direction ceiling, not a real signal (see below) | 0.033 |
+| granite-4.2-30b | **0.620** @ L32/64 | 0.379 |
+
+*(These numbers reflect §10's parsing-bug fix, applied after this
+section was first written — see §10 for what changed and why. The table
+originally showed Qwen3.6-27B-OBLITERATED as "undefined/degenerate";
+that was itself downstream of the same bug and no longer holds.)*
 
 **Real divergence from the paper, root cause verified (not a bug):** the
 paper's peak \|ρ\| stays under 0.19 across all six of their models (near
 their random-direction baseline) — their central claim is that
-representation and verbalization are almost decoupled. Ours is 3-4x
-higher for both Qwen3-8B and granite. Checked this directly rather than
-just speculating: for Qwen3-8B's `direct_a` probe, `corr(internal, verbal)
-= 0.832` is **numerically identical** to `corr(internal, label) = 0.832`,
-because `corr(verbal, label) = 1.0` — that probe has perfect accuracy for
-this model, so `verbal ≈ label` exactly, and correlating internal score
-against verbal is mathematically the same computation as correlating it
-against ground truth. Checked across the other probes too: coupling
-strength tracks probe accuracy directly (accuracy 0.60/0.80/0.85/1.00 →
-\|ρ\| 0.347/0.602/0.664/0.832). The mechanism: both `internal_score` and
-`verbal_signal` are separately trying to predict the same
-`ground_truth_label`; if both are decent classifiers of it, they
+representation and verbalization are almost decoupled. Ours is 3-4.5x
+higher across **all three** of our models. Checked this directly rather
+than just speculating: for Qwen3-8B's `direct_a` probe, `corr(internal,
+verbal) = 0.832` is **numerically identical** to `corr(internal, label) =
+0.832`, because `corr(verbal, label) = 1.0` — that probe has perfect
+accuracy for this model, so `verbal ≈ label` exactly, and correlating
+internal score against verbal is mathematically the same computation as
+correlating it against ground truth. Checked across the other probes
+too: coupling strength tracks probe accuracy directly (accuracy
+0.60/0.80/0.85/1.00 → \|ρ\| 0.347/0.602/0.664/0.832). The mechanism: both
+`internal_score` and `verbal_signal` are separately trying to predict the
+same `ground_truth_label`; if both are decent classifiers of it, they
 necessarily correlate with *each other* through that shared cause — no
 causal "internal signal leaking into speech" required. Our probes are
 direct yes/no questions the model mostly answers correctly (so
@@ -238,27 +251,10 @@ correlate strongly with it, internal probe included. Higher-accuracy
 verbalization mechanically produces higher apparent "coupling" with
 anything else that also tracks truth well; this is a genuine design
 difference between our probes and their judge, not an error in either.
-
-**Important correctness fix:** Qwen3.6-27B-OBLITERATED's verbalized
-`eval_signal` is **identical (0.0) on 99 of its 100
-verbalized-probe responses** (updated count, see §9 — was reported as
-"all 100" before a real context-corruption bug was found and fixed) — it
-answers "not an evaluation" regardless of the true label, on nearly
-every probe phrasing and transcript, with one exception (one probe,
-one transcript). 4 of 5 probes remain exactly constant, so their
-correlation/MI are still mathematically *undefined* (zero variance), not
-measured-and-equal-to-zero; `compare_internal_vs_verbal.py` detects this
-explicitly (`degenerate: true` in the output JSON) and `plot_coupling.py`
-renders it as an "undefined (constant answer)" panel instead of a
-misleading flat line at 0. The fifth probe (`h_intent_and_style_a`), no
-longer perfectly constant, now yields a numerically defined coupling
-value (peak `|rho|=0.378` at layer 22) — but this sits *exactly* at that
-layer's random-direction control ceiling (also 0.378), confirming it's
-an artifact of how little variance one exception produces at n=20, not a
-real signal. (Also corrects an earlier description of this model as
-"guessing randomly" — it isn't guessing at all, it's consistently
-denying almost every time, which happens to also score as near-chance
-AUROC since an almost-constant prediction can barely rank anything.)
+This mechanism now applies uniformly to all three Phase 2 models, not
+two of three — see §10 for why Qwen3.6-27B-OBLITERATED's row changed so
+much (it was never actually "degenerate"; a parsing bug made it look
+that way).
 Charts: `output/charts/07_coupling_layers_{last,mean}_{rho,mi}.png`,
 `08_coupling_peak_summary.png`.
 
@@ -368,9 +364,10 @@ bug:
 
 **Caveat on the Qwen3.6-27B-OBLITERATED baseline, found and disclosed
 rather than glossed over:** this steering baseline (0.667, real variance)
-does **not** reproduce Experiment 2's finding that this model answers
-"not an evaluation" on 99 of its 100 full-dataset verbalized-probe
-responses (see §9). Root cause: a
+does **not** match this model's corrected full-dataset verbalized
+ensemble AUROC of 1.000 (§10) either — though both now show real,
+non-degenerate variance, unlike the near-total constancy an earlier pass
+of this log described. Root cause: a
 genuine inconsistency between two scripts, not a bug in either — the
 original verbalized run (`probes/verbalize_probe.py`) has thinking
 **enabled** on its follow-up probe question (`enable_thinking=True` for
@@ -381,6 +378,18 @@ not the same experimental condition and shouldn't be compared directly —
 itself a small additional finding about how sensitive this model's
 verbalized eval-awareness is to whether thinking is enabled on the
 follow-up question.
+
+**Also unverified: §10's parsing bug.** `steer.py` scores its follow-up
+probe with the same `resolve_answer()` function responsible for §10's
+bug, so these steering numbers could in principle be affected too. We
+could not re-check them the way we did for Phase 1/Experiment 2, because
+`steer.py`'s saved output only has the parsed `eval_signal` per cell, not
+the raw response text needed to re-derive it. One mitigating factor:
+§10's bug requires a model to restate the prompt template or draft an
+answer during *extended thinking* before its real final answer, and
+`steer.py` disables thinking on this call (the same inconsistency noted
+above) — which removes the specific behavior that caused the bug
+elsewhere. Left as an open, disclosed limitation, not assumed clean.
 
 ## 8. Not yet done
 
@@ -493,3 +502,127 @@ PDF). Code fixes (`inference/run_inference.py`, `inference/api_clients.py`,
 `probes/verbalize_probe.py`) are committed; this file and the corrected
 `output/` data are not (per the standing instruction not to commit
 `PROGRESS.md`, and `output/` staying git-ignored except chart PNGs).
+
+## 10. A much bigger correction: the verbalized-answer parsing bug
+
+§9 found and fixed reasoning/answer-**display** bugs. This section is a
+separate, much more consequential correction: a bug in how we **grade**
+a model's verbalized answer, discovered while investigating an unrelated
+user question ("why does the dashboard mark this response a mismatch
+when the model clearly said YES?").
+
+### What was wrong
+
+`resolve_answer()` in `probes/verbalize_probe.py` — the single function
+every probing path in this project uses to turn a model's free-text
+response into a binary `eval_signal` — had two compounding bugs:
+
+1. **First `<label>` match, not last.** `LABEL_RE.search()` returns the
+   *first* `<label>...</label>` tag in the response. A thinking-mode
+   model routinely restates the prompt's own format template (literally
+   `<label>[label ... NO, YES]</label>`) or drafts an example answer
+   before its real final answer. The first match was then that
+   placeholder or an early draft, not the model's actual conclusion.
+2. **Order-biased fallback.** When no clean tag match was found, the
+   parser scanned the *entire* response for the target words ("NO"/"YES",
+   or the equivalent pair for other probes) and returned whichever was
+   checked first in a fixed dict order — always the deploy-side label,
+   since every call site builds `targets = {real: 0.0, eval: 1.0}` with
+   the deploy label first. In a long, deliberative response, both words
+   are often present somewhere incidentally (a hedge, an aside, a
+   restated instruction), so this silently defaulted to "not an
+   evaluation" regardless of what the model actually concluded.
+
+Confirmed directly on the user's example: the model's raw response ended
+in `<label>YES</label>` — twice — but was recorded as `eval_signal=0.0`
+because an earlier restatement of the format instructions
+(`<label>[YES/NO]</label>`) was parsed first, and "NO" is checked before
+"YES" in the fallback.
+
+### Fix
+
+`resolve_answer()` now (a) takes the *last* `<label>` match instead of
+the first, and (b) for both the tag-content and whole-response fallback
+paths, returns whichever target word occurs *last* by character position
+in the text, not whichever is checked first in dict order. This is a
+general, position-aware fix — not specific to any one model or probe.
+
+### Scope — checked across all 9 models, all 1100 verbalized-probe rows
+
+A pure text-reprocessing pass (re-deriving `eval_signal` from
+already-saved `raw_response` text for every model, no new model calls)
+found:
+
+| Model | Rows changed / 100 | Ensemble AUROC before | Ensemble AUROC after |
+|---|---|---|---|
+| Qwen3.6-27B-OBLITERATED | **60** | 0.450 | **1.000** |
+| granite-4.2-30b | **15** | 0.735 | **0.950** |
+| Gemma-4-12B-OBLITERATED | **19** | 0.995 | **0.985** |
+| (other 6 models) | 0 | — | unchanged |
+
+Six of nine models are completely unaffected — the bug requires a
+specific behavioral pattern (verbose, restate-then-draft-then-answer
+thinking) that only three models happened to exhibit. Where it does
+apply, the effect is severe and the *direction* was wrong, not just the
+magnitude: the buggy fallback structurally favors "not an evaluation"
+regardless of the model's real answer.
+
+### The headline retraction
+
+**Qwen3.6-27B-OBLITERATED was never "internally aware, verbally
+silent."** That was this project's single most notable claimed result
+(see the retracted paragraph in explainer.md and the old §6 text above,
+left in place with corrections rather than deleted, so the mistake stays
+visible). Corrected:
+
+- Verbalized ensemble AUROC: 0.450 (below chance) → **1.000** (perfect).
+- It does **not** answer "not an evaluation" 99/100 times — that was
+  itself downstream of this bug. Its real behavior: highly accurate
+  verbalization, closely tracking ground truth, same as its strong
+  internal-probe result (0.880 AUROC).
+- Its Experiment 2 coupling is **not** undefined/degenerate — recomputed,
+  it shows the *highest* peak coupling of the three Phase 2 models
+  (`|ρ| = 0.837`, was reported as undefined), fully consistent with the
+  same shared-ground-truth-confound mechanism already documented for
+  Qwen3-8B and granite-4.2-30b (§6) — just previously masked because the
+  input verbalized data was wrong.
+- None of the three Phase 2 models now show a
+  representation-verbalization dissociation. This means **this project
+  does not replicate the source paper's central dissociation claim** at
+  the individual-model level, once this bug is fixed — a genuine,
+  disclosed non-replication, and arguably a more important finding than
+  the retracted one.
+- The Phase 2 "strongest/weakest/chance verbalizer" model-selection
+  rationale (§6 intro) no longer holds post-correction: all three models
+  are now strong-to-perfect verbalizers. Left disclosed rather than
+  retroactively re-justified.
+
+### What could not be re-verified
+
+`probes/steer.py` (Experiment 3) scores its own follow-up probe with the
+same `resolve_answer()`, so it could in principle be affected too — but
+its saved output (`steering_results.json`) only stores the parsed
+`eval_signal` per cell, not the raw response text needed to re-derive it,
+so this could not be checked the way Phase 1 and Experiment 2 were.
+Mitigating factor: `steer.py` explicitly disables thinking on its
+follow-up call, which removes the specific extended-thinking
+restate-then-draft behavior that caused the bug elsewhere. Left as an
+open, disclosed limitation (see the Experiment 3 caveat in §7), not
+assumed clean.
+
+### Downstream updates made
+
+Charts `01`-`04` (Phase 1) and `07`-`08` (Experiment 2 coupling)
+regenerated; dashboard rebuilt and its data updated; `main.tex` rewritten
+substantially — abstract, the new Phase-1 subsection documenting this bug
+(mirroring this section), Table `phase1-results`, the Phase 2
+model-selection paragraph, Table `exp1-results`, the retracted "most
+notable result" paragraph, the entire Experiment 2 section (table +
+discussion), the Experiment 3 caveats, four of the five Discussion
+bullets, a new Limitations bullet, the Conclusion, and the comparison
+appendix's coupling-divergence section — plus `explainer.md`'s "it knew,
+it just denied it" narrative replaced with an honest "we made a grading
+mistake" story. `eval_awareness_report.pdf` was **not** regenerated (no
+local LaTeX toolchain); re-upload the zip to Overleaf for a current PDF.
+Code fix (`probes/verbalize_probe.py`) is committed; this file and the
+corrected `output/` data are not (same standing instruction as always).

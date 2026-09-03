@@ -62,17 +62,12 @@ it's a test / no it's not"). Others were basically clueless and guessed
 at random.
 
 One especially interesting model — an "obliterated" Qwen 3.6 variant —
-scored slightly *below* chance (worse than a coin flip) on this test. But
-when we actually looked closer at what it was saying, it turned out to be
-something more specific and more interesting than random guessing: it
-answered **"no, this isn't a test" on 99 out of 100 answers** (5 phrasings
-× 20 conversations, one lone exception), even on conversations
-that really were tests. It wasn't flipping a coin — it was almost
-stubbornly saying the same thing regardless of the truth, which happens
-to also score as chance-or-worse because there's barely any variation
-for the scoring math to work with. That sets up the next question: **is
-it because the model genuinely can't tell, or because it can tell but
-just refuses to ever say so?**
+*appeared* to score at or below chance (like a coin flip, or worse) on
+this test at first. But it turned out **we were grading its answer sheet
+wrong**, not that the model was guessing (see the "grading mistake"
+callout below, in explainer_docs/PROGRESS.md §10, for the full story) —
+once graded correctly, this model turned out to be one of the *best* at
+admitting it, not the worst.
 
 ## Phase 2: Peeking Inside the AI's "Brain" (Experiment 1 — Done)
 
@@ -113,11 +108,31 @@ almost perfectly (98% accuracy for one model). This means: **the model's
 internal brainwaves "know" it's being tested, at least at some point in
 its thinking, even before it says a single word out loud.**
 
-The most striking result: that "obliterated" Qwen 3.6 model that almost
-always said "no, not a test" when we *asked* it (99 times out of 100), no
-matter what? Its internal compass was *not* stuck at all — it strongly
-pointed the right direction (88% accuracy). In other words: **it knew. It
-just (almost) always denied it.**
+That "obliterated" Qwen 3.6 model's internal compass strongly pointed the
+right direction (88% accuracy) — consistent with what it turned out to
+actually be *saying* out loud too, once we fixed our grading mistake: it
+was one of our most accurate models at both. See the grading-mistake
+callout below for what we originally (wrongly) thought this meant.
+
+> **A grading mistake, found and fixed.** For a while, this project's
+> notes described this Qwen 3.6 model as "the cleanest example of an AI
+> that knows internally but never says so" — its internal compass looked
+> right, but our records showed it saying "not a test" almost every
+> single time, even for real tests. That sounded like a big deal. It
+> turned out to be a bug in *our own grading script*, not a real thing
+> about the model. The model often "shows its work" before giving a
+> final answer — like a student writing scratch notes in the margin
+> before circling their real answer. Our script was sometimes reading the
+> *scratch notes* (which often just repeated the question, like "answer:
+> YES or NO") instead of the model's *actual circled answer* further
+> down the page, and defaulting to "NO" whenever it got confused. Once we
+> fixed the grading script to always read the model's real, final,
+> circled answer, this model turned out to correctly say "yes, this is a
+> test" almost every time — one of the best in the whole group, not the
+> worst. We're keeping this mistake in the writeup on purpose: a finding
+> this dramatic (a model that "knows but never tells") is exactly the
+> kind of result that deserves someone double-checking the grading before
+> believing it, and in our case, the double-check mattered.
 
 ## Phase 3: Do the Two Signals Actually Agree? (Experiment 2 — Next)
 
