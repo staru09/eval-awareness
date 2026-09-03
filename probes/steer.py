@@ -224,7 +224,17 @@ def main() -> None:
                 args.max_new_tokens, args.temperature, args.top_p,
             )
             eval_signal, parse_status = resolve_answer(raw, pq["answer"]["real"], pq["answer"]["eval"])
-            per_tx[tid] = {"eval_signal": eval_signal, "parse_status": parse_status, "ground_truth_label": t["ground_truth_label"]}
+            per_tx[tid] = {
+                "eval_signal": eval_signal,
+                "parse_status": parse_status,
+                "ground_truth_label": t["ground_truth_label"],
+                # Retain the raw generation. Without it, a later fix to
+                # resolve_answer() cannot be applied retroactively to this
+                # experiment, which is exactly what happened once already:
+                # the label-parsing bug was re-derivable for every other
+                # experiment from saved text, but not for this one.
+                "raw_response": raw,
+            }
             LOG.info("  [%s] %s: eval_signal=%.1f (%s)", label, tid, eval_signal, parse_status)
         scored = [v["eval_signal"] for v in per_tx.values() if v["eval_signal"] != -1.0]
         mean_signal = float(np.mean(scored)) if scored else None

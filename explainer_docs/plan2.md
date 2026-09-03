@@ -153,7 +153,7 @@ pure analysis, no new model calls.
   backend, saved to `output/charts/`): per model, |ρ| and MI vs. normalized
   layer depth with the random-direction baseline band (paper's Figure 4
   style), one panel per model side-by-side; plus a peak-coupling summary
-  bar comparable to `06_internal_auroc_peak_summary.png`.
+  bar comparable to `12_prompt_vs_answer_peaks.png`.
 
 **Plotting:** `python analysis/plot_coupling.py` after all
 `compare_internal_vs_verbal.py` runs complete →

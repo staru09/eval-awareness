@@ -197,8 +197,10 @@ AUROC vs. a per-fold-calibrated threshold don't have to agree at n=20).
 Its mean-token readout is actually cleaner and peaks much earlier (layer
 3, AUROC 0.770, accuracy 0.650) — mirrors the paper's own Nemotron3-49B
 special case, where they had to switch readout conventions for one
-model. Charts: `output/charts/05_internal_auroc_layers_{last,mean}.png`,
-`06_internal_auroc_peak_summary.png` (`analysis/plot_internal_results.py`).
+model. Charts: `output/charts/11_prompt_vs_answer_layers_{last,mean}.png`
+and `12_prompt_vs_answer_peaks.png` (`analysis/plot_prompt_vs_answer.py`).
+The former `05_*`/`06_*` charts were deleted: they showed these peaks
+against only the per-layer random band, which overstates them (see §11).
 
 **Headline finding:** Qwen3.6-27B-OBLITERATED internally separates
 eval-vs-deploy almost as well as Qwen3-8B (0.88 AUROC) while verbalizing
