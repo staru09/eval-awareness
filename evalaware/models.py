@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 @dataclass
 class ModelSpec:
@@ -9,8 +11,6 @@ class ModelSpec:
 
 
 def load_model(model_path: str, dtype: str = "bfloat16"):
-    import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     if tok.pad_token_id is None:
