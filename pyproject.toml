@@ -1,0 +1,28 @@
+[project]
+name = "evalaware"
+version = "0.1.0"
+description = "Evaluation awareness in language models: representation, verbalization, steering"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "scipy",
+    "scikit-learn",
+    "matplotlib",
+    "pyyaml",
+    "torch",
+    "transformers",
+    "datasets",
+]
+
+[project.optional-dependencies]
+api = ["openai", "anthropic"]
+
+[project.scripts]
+evalaware = "evalaware.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["evalaware"]

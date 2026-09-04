@@ -1,5 +1,11 @@
 # Eval-Awareness Experiment — Progress Log
 
+> **Note on file paths.** This branch reorganised the code into the
+> `evalaware/` package with a single CLI. Paths below that point at
+> `analysis/`, `inference/`, `probes/` or `judges/` refer to the layout on
+> `updated_experiments`; the results and reasoning are unchanged. See
+> `README.md` for the current commands.
+
 Tracks what's been built and run so far. See `plan.md` for the original
 verbalized-probing design doc, and `plan2.md` for the internal/
 mechanistic-probing phase (Experiments 1-3), which replicates methodology

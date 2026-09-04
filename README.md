@@ -1,78 +1,118 @@
-# LLM Evaluation-Awareness Experiments
+# Evaluation awareness: representation, verbalization, steering
 
-This project measures whether language models can tell they are being evaluated, whether they say so out loud, and whether that signal is also present in their internal activations.
+Does a language model represent the fact that it is being evaluated, does it
+say so when asked, and does that internal representation causally drive what it
+says? Replication and extension of Heidari, Memarian and Rabusseau,
+*Evaluation Awareness in Language Models* (arXiv:2608.21766), on 20 transcripts
+(10 evaluation, 10 deployment) in `data/dataset.json`.
 
-Phase 1 (verbalized eval-awareness) asks a model, across five independently worded probe questions, whether each of 20 transcripts (10 evaluation-framed, 10 deployment-framed) was an evaluation. It was run on 9 models via local Hugging Face Transformers, self-hosted vLLM, or the OpenAI/Anthropic APIs.
+Results, corrections and caveats are in `explainer_docs/PROGRESS.md`. Chart by
+chart commentary is in `output/charts/CHARTS_EXPLAINER.md`.
 
-Phase 2 follows [Heidari, Memarian & Rabusseau, *Evaluation Awareness in Language Models: Representation, Verbalization, and Control](https://arxiv.org/abs/2608.21766)*. On 3 of the 9 models it checks whether “this is an evaluation” is linearly readable from residual-stream activations, how that internal signal couples to verbalized answers, and whether steering along the probe direction changes what the model says.
+## Install
 
-## Results
-
-All 20 transcripts × 5 verbalized probes, 0 parse failures on every model.
-
-
-| Model                   | Ensemble AUROC |
-| ----------------------- | -------------- |
-| GPT-5.6-terra           | 1.000          |
-| Qwen3-8B                | 1.000          |
-| Gemma-4-12B-OBLITERATED | 1.000          |
-| Claude Sonnet 5         | 0.985          |
-| qwen3-4b-OBLITERATED    | 0.875          |
-| Mistral-Small-24B       | 0.865          |
-| Llama-3.1-8B            | 0.830          |
-| granite-4.2-30b         | 0.735          |
-| Qwen3.6-27B-OBLITERATED | 0.500          |
-
-
-Ensemble AUROC hides per-probe inconsistency. No model is uniformly strong across all 5 phrasings. `h_purpose_analysis_a` is the most reliable probe (floor of 0.75). `direct_vn_a` is among the weakest for non-frontier models. Verbalized eval-awareness is phrasing-sensitive.
-
-Qwen3.6-27B-OBLITERATED scores exactly 0.5 on every probe (accuracy 0.5, zero parse failures). It answers “not an evaluation” on all 100 verbalized-probe calls.
-
-Phase 2 used Qwen3-8B (strongest verbalizer), granite-4.2-30b (weakest non-degenerate verbalizer), and Qwen3.6-27B-OBLITERATED (verbalizes at chance).
-
-- Internal representation: a per-layer linear probe on residual-stream activations separates eval from deploy transcripts (AUROC 0.73–0.98). All three models clear or approach the source paper’s 0.7 benchmark at their best layer.
-- Internal-vs-verbalized coupling: Spearman |ρ| up to 0.64, higher than the source paper’s |ρ| < 0.19. Both signals separately track ground truth on our direct probes, so they correlate through that shared cause rather than internal state leaking into speech.
-- Standout case: Qwen3.6-27B-OBLITERATED internally separates eval vs. deploy almost as well as Qwen3-8B (0.88 AUROC) while verbalizing nothing about it.
-- Steering did not produce a clean, consistent effect for any model, matching a limitation reported in the source paper.
-
-Eval-awareness is measurable inside activations, is inconsistently (sometimes not at all) verbalized, and is not reliably steerable via a simple linear direction.
-
-## File directory
-
-```
-eval-awareness/
-├── plan.md
-├── run.sh
-├── data/
-│   ├── build_dataset.py
-│   ├── dataset.json
-│   └── contrastive_pairs_16.txt
-├── inference/
-│   ├── model_utils.py
-│   ├── run_inference.py
-│   ├── api_clients.py
-│   ├── run_inference_api.py
-│   └── run_benchmark.py
-├── probes/
-│   ├── compute_probe.py
-│   ├── score_activations.py
-│   ├── steer.py
-│   ├── run_internal_pipeline.sh
-│   ├── probe_questions.yaml
-│   └── verbalize_probe.py
-├── analysis/
-│   ├── classify_auroc.py
-│   ├── compare_internal_vs_verbal.py
-│   ├── plot_results.py
-│   ├── plot_internal_results.py
-│   ├── plot_coupling.py
-│   └── plot_steering.py
-├── judges/
-│   └── gpt_judge.py
-├── dashboard/
-│   └── src/data/dashboard_data.json
-├── .github/workflows/
-│   └── deploy-dashboard.yml
-└── output/charts/
+```bash
+uv sync                 # or: uv pip install -e ".[api]"
 ```
 
+## Layout
+
+```
+data/            dataset.json, contrastive_pairs_16.txt, probe_questions.yaml, build_dataset.py
+evalaware/       the pipeline
+output/          generated; gitignored except charts/
+```
+
+| module | what it does |
+|---|---|
+| `models.py` | HF model loading, chat templating |
+| `parsing.py` | reasoning/answer split, verbalized label parsing |
+| `datasets.py` | dataset, contrastive pairs, probe questions |
+| `activations.py` | generation and residual-stream capture |
+| `probe.py` | 16-pair probe direction plus random controls |
+| `scoring.py` | project activations onto the probe |
+| `verbalize.py` | verbalized probing on a local model |
+| `steering.py` | contrastive activation addition |
+| `metrics.py` | AUROC, band statistic, nulls, coupling |
+| `api.py` | OpenAI / Anthropic / vLLM generation and probing |
+| `plots.py` | charts |
+| `cli.py` | `python -m evalaware.cli <command>` |
+
+## Running the experiments
+
+`$M` is a HF id, `$D` an output directory such as `output/local/qwen3-8b`.
+
+**Phase 1, verbalized probing over an API model.** Generation plus the five
+follow-up questions, scored as ensemble AUROC.
+
+```bash
+python -m evalaware.cli api --provider vllm --base-url http://localhost:8000/v1 \
+    --model "$M" --out-dir "$D"
+```
+
+**Experiment 1, internal representation.** Generate with activation capture,
+build the probe direction from the 16 contrastive pairs, project, score.
+
+```bash
+python -m evalaware.cli generate --model-path "$M" --out-dir "$D"
+python -m evalaware.cli probe    --model-path "$M" --out "$D/probe.pt"
+python -m evalaware.cli score    --probe "$D/probe.pt" --activations-dir "$D/activations" \
+    --out "$D/scores.npz"
+python -m evalaware.cli auroc    --scores "$D/scores.npz" --pooling last \
+    --out "$D/results/internal_auroc_last.json"
+```
+
+**Experiment 1b, prompt-only readout.** The same probe read before the model
+generates anything, reusing the stored prompts so the token sequence is
+identical.
+
+```bash
+python -m evalaware.cli capture-prompt --model-path "$M" \
+    --traces "$D/reasoning_traces.json" --out-dir "$D/activations_prompt"
+python -m evalaware.cli score --probe "$D/probe.pt" \
+    --activations-dir "$D/activations_prompt" --out "$D/scores_prompt.npz"
+```
+
+**Experiment 2, coupling.** Internal probe score against verbalized answer, per
+layer, with a random-direction band.
+
+```bash
+python -m evalaware.cli coupling --scores "$D/scores.npz" \
+    --verbalized-csv "$D/verbalized_responses.csv" --pooling last \
+    --out "$D/results/coupling_last.json"
+```
+
+**Experiment 3, steering.** Add `alpha * m_l * v_l` to the residual stream at
+one layer while the model answers the probe question.
+
+```bash
+python -m evalaware.cli steer --model-path "$M" --probe "$D/probe.pt" \
+    --traces "$D/reasoning_traces.json" --activations-dir "$D/activations" \
+    --layers 11,19,23,27 --alphas=-1.0,-0.5,0.5,1.0 --out "$D/results/steering_results.json"
+```
+
+**Null models.** A peak taken over 36 to 64 layers at n=20 is inflated by the
+selection itself, so this reports a band statistic against a label-permutation
+null and fresh random directions.
+
+```bash
+python -m evalaware.cli nulls --scores "$D/scores.npz" \
+    --activations-dir "$D/activations" --traces "$D/reasoning_traces.json" \
+    --pooling last --out "$D/results/nulls_answer_last.json"
+```
+
+**Charts.**
+
+```bash
+python -m evalaware.cli plots --output-dir output
+```
+
+## Notes
+
+The random controls in `probe.py` are seeded from a fixed key so results
+reproduce across runs. The key is shared by all models, so two models of equal
+width get the same control directions; this affects independence of the control
+band across models, not its validity for any one model.
+
+`--alphas` accepts a leading negative number in either spelling; argparse would
+otherwise read `-1.0,...` as an option.
