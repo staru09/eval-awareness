@@ -1,6 +1,7 @@
 import csv
 import json
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,6 +13,11 @@ from .verbalize import FIELDS
 class Generation:
     reasoning: str | None
     text: str
+    n_output_tokens: int | None = None
+
+
+def _usage_tokens(resp, field: str) -> int | None:
+    return getattr(getattr(resp, "usage", None), field, None)
 
 
 def _key(name: str, provider: str) -> str:
@@ -56,6 +62,7 @@ def _openai_reasoning(client, model, messages, max_tokens, effort) -> Generation
     return Generation(
         "\n".join(reasoning).strip() or None,
         "\n".join(text).strip() or (getattr(resp, "output_text", None) or ""),
+        _usage_tokens(resp, "output_tokens"),
     )
 
 
@@ -67,7 +74,8 @@ def generate_openai(client, model, messages, max_tokens=2048, temperature=0.7,
         model=model, messages=messages, max_completion_tokens=max_tokens, temperature=temperature,
     )
     message = resp.choices[0].message
-    return Generation(getattr(message, "reasoning_content", None), message.content or "")
+    return Generation(getattr(message, "reasoning_content", None), message.content or "",
+                      _usage_tokens(resp, "completion_tokens"))
 
 
 def generate_anthropic(client, model, messages, max_tokens=2048, temperature=1.0,
@@ -78,7 +86,8 @@ def generate_anthropic(client, model, messages, max_tokens=2048, temperature=1.0
     resp = client.messages.create(**kwargs)
     reasoning = [b.thinking for b in resp.content if getattr(b, "type", None) == "thinking"]
     text = [b.text for b in resp.content if getattr(b, "type", None) == "text"]
-    return Generation("\n".join(reasoning).strip() or None, "\n".join(text).strip())
+    return Generation("\n".join(reasoning).strip() or None, "\n".join(text).strip(),
+                      _usage_tokens(resp, "output_tokens"))
 
 
 def generate_vllm(client, model, messages, max_tokens=2048, temperature=0.7,
@@ -89,16 +98,17 @@ def generate_vllm(client, model, messages, max_tokens=2048, temperature=0.7,
     )
     message = resp.choices[0].message
     raw = message.content or ""
+    tokens = _usage_tokens(resp, "completion_tokens")
     server_reasoning = getattr(message, "reasoning", None)
     if server_reasoning is not None:
         reasoning = server_reasoning.strip() or None
         if not raw and reasoning:
-            return Generation(None, reasoning)
-        return Generation(reasoning, raw)
+            return Generation(None, reasoning, tokens)
+        return Generation(reasoning, raw, tokens)
     m = THINK_RE.search(raw)
     if m:
-        return Generation(m.group(1).strip() or None, raw[m.end():].strip())
-    return Generation(None, raw)
+        return Generation(m.group(1).strip() or None, raw[m.end():].strip(), tokens)
+    return Generation(None, raw, tokens)
 
 
 PROVIDERS = {
@@ -125,8 +135,11 @@ def generate_traces(client, provider: str, model: str, rows: list[dict], out_dir
                     effort: str) -> list[dict]:
     generate = PROVIDERS[provider]
     out_dir.mkdir(parents=True, exist_ok=True)
+    config = {"max_tokens": max_tokens, "temperature": temperature,
+              "enable_thinking": enable_thinking}
     entries = []
     for row in rows:
+        started = time.time()
         result = generate(client, model, [{"role": "user", "content": row["text"]}],
                           max_tokens=max_tokens, temperature=temperature,
                           enable_thinking=enable_thinking, effort=effort)
@@ -140,7 +153,11 @@ def generate_traces(client, provider: str, model: str, rows: list[dict], out_dir
             "generated_text": result.text,
             "reasoning_trace": result.reasoning,
             "final_answer": result.text,
+            "n_generated_tokens": result.n_output_tokens,
+            "generation_config": dict(config),
             "model": model,
+            "provider": provider,
+            "elapsed_s": round(time.time() - started, 2),
         })
         (out_dir / "reasoning_traces.json").write_text(
             json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8")

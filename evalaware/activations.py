@@ -1,4 +1,5 @@
 import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -49,8 +50,11 @@ def generate_and_capture(model, tok, spec: ModelSpec, rows: list[dict], out_dir:
     if capture:
         act_dir.mkdir(parents=True, exist_ok=True)
 
+    config = {"max_new_tokens": max_new_tokens, "temperature": temperature,
+              "top_p": top_p, "enable_thinking": spec.enable_thinking}
     entries = []
     for row in rows:
+        started = time.time()
         prompt = prompt_only(tok, row["text"], spec)
         inputs = tok(prompt, return_tensors="pt", add_special_tokens=False).to(model.device)
         with torch.no_grad():
@@ -79,7 +83,9 @@ def generate_and_capture(model, tok, spec: ModelSpec, rows: list[dict], out_dir:
             "final_answer": answer,
             "n_prompt_tokens": int(inputs["input_ids"].shape[1]),
             "n_generated_tokens": int(gen_ids.shape[0]),
+            "generation_config": dict(config),
             "model": spec.hf_id,
+            "elapsed_s": round(time.time() - started, 2),
         })
         (out_dir / "reasoning_traces.json").write_text(
             json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8")

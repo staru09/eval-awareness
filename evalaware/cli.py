@@ -91,7 +91,8 @@ def cmd_api(args) -> None:
                                   args.out_dir / "verbalized_responses.csv",
                                   args.max_tokens, args.temperature)
     _write_json(args.out_dir / "results" / "verbalized_auroc.json", {
-        "summary": {"model": args.model, "n_transcripts": len(traces), "n_probes": len(questions),
+        "summary": {"model": args.model, "provider": args.provider,
+                    "n_transcripts": len(traces), "n_probes": len(questions),
                     "ensemble_auroc": metrics.ensemble_auroc(verbal)},
         "per_probe": metrics.per_probe_auroc(verbal),
     })
@@ -427,7 +428,8 @@ def _add_probing(sub) -> None:
     ap.add_argument("--out-dir", type=Path, required=True)
     ap.add_argument("--max-tokens", type=int, default=2048)
     ap.add_argument("--temperature", type=float, default=0.7)
-    ap.add_argument("--enable-thinking", action="store_true")
+    ap.add_argument("--enable-thinking", dest="enable_thinking", action="store_true", default=True)
+    ap.add_argument("--no-thinking", dest="enable_thinking", action="store_false")
     ap.add_argument("--reasoning-effort", default="medium")
 
 
