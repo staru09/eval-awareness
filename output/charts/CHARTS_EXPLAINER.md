@@ -27,7 +27,7 @@ per transcript and scored as AUROC against ground truth. The range is 1.000
 (Llama-3.1-8B), so **no model is at chance**. Three of these bars moved
 substantially after a parsing bug in `resolve_answer()` was fixed; the
 Qwen3.6-27B-OBLITERATED bar went from below chance to 1.000, which retracted
-the project's former headline finding. See `explainer_docs/PROGRESS.md` §10.
+the project's former headline finding.
 
 ## 02_probe_heatmap.png
 

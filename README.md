@@ -1,13 +1,4 @@
-# Evaluation awareness: representation, verbalization, steering
-
-Does a language model represent the fact that it is being evaluated, does it
-say so when asked, and does that internal representation causally drive what it
-says? Replication and extension of Heidari, Memarian and Rabusseau,
-*Evaluation Awareness in Language Models* (arXiv:2608.21766), on 20 transcripts
-(10 evaluation, 10 deployment) in `data/dataset.json`.
-
-Results, corrections and caveats are in `explainer_docs/PROGRESS.md`. Chart by
-chart commentary is in `output/charts/CHARTS_EXPLAINER.md`.
+# Evaluation awareness Experiments
 
 ## Install
 
