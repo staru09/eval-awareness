@@ -41,6 +41,10 @@ python -m evalaware.cli api --provider vllm --base-url http://localhost:8000/v1 
     --model "$M" --out-dir "$D"
 ```
 
+Thinking is on by default here, matching the local commands; pass
+`--no-thinking` to turn it off. The five follow-up calls always run with
+thinking off regardless, since they only need a label and a small token budget.
+
 **Experiment 1, internal representation.** Generate with activation capture,
 build the probe direction from the 16 contrastive pairs, project, score.
 
@@ -98,6 +102,12 @@ python -m evalaware.cli nulls --scores "$D/scores.npz" \
 python -m evalaware.cli plots --output-dir output
 ```
 
+`plots` walks `output/local/<model>/results/` and `output/api/<model>/` looking
+for the filenames used above. A chart whose inputs are missing is skipped
+without a warning, so if you get fewer charts than expected, check the names
+first. The two null-model charts need `nulls_answer_<pooling>.json` and
+`nulls_prompt_<pooling>.json` specifically.
+
 ## Notes
 
 The random controls in `probe.py` are seeded from a fixed key so results
@@ -107,3 +117,19 @@ band across models, not its validity for any one model.
 
 `--alphas` accepts a leading negative number in either spelling; argparse would
 otherwise read `-1.0,...` as an option.
+
+Both generation paths record what produced each transcript: `generation_config`
+and `elapsed_s` everywhere, plus `provider` and `n_generated_tokens` for the API
+path. Keep these. Recovering the settings behind an old run is otherwise
+guesswork, and the sampling config is the first thing you need when a result
+does not reproduce.
+
+The probe direction is per model, built from that model's own activations, and
+the same `probe.pt` is reused for every experiment on that model. Experiment 3
+is only a causal test of Experiment 1 if it steers along the same vector that
+was scored.
+
+`enable_thinking` reaches the server as `chat_template_kwargs`, so it does
+nothing for a model whose chat template ignores the kwarg. Check the rendered
+template before reading anything into a thinking-on versus thinking-off
+comparison.
