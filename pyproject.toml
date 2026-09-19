@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 api = ["openai", "anthropic"]
+sae = ["sae-lens"]
 
 [project.scripts]
 evalaware = "evalaware.cli:main"

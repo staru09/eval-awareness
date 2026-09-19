@@ -6,3 +6,6 @@ test-output/
 dashboard/node_modules
 dashboard/dist
 dashboard/dev.log
+*.txt
+*.zip
+*.md
