@@ -9,17 +9,58 @@ from evalaware import metrics, scoring, verbalize
 AGGS = {"argmax": 1, "band": 3}
 
 
-def group_scores(scores, n_eval_aware, group, stat=1):
-    """[n, rollouts, positions, candidates, 2] -> [n, positions].
+def _candidates(scores, n_eval_aware, group, stat=1):
+    """[n, rollouts, positions, candidates, 2] -> [n, rollouts, positions].
 
-    Max over rollouts and over candidates within the group, matching the post's
-    statistic. stat=1 selects the length-normalised mean log-prob; stat=0 is the
-    raw sum, which favours short candidates.
+    stat=1 is the length-normalised mean log-prob; stat=0 the raw sum, which
+    favours short candidates. Padded positions stay NaN.
     """
     part = scores[..., :n_eval_aware, stat] if group == "eval_aware" else scores[..., n_eval_aware:, stat]
     with np.errstate(invalid="ignore"):
-        pooled = np.nanmax(part, axis=(1, 3))
-    return np.nan_to_num(pooled, nan=np.nanmin(pooled))
+        return np.nanmax(part, axis=3)
+
+
+def pooled(scores, n_eval_aware, group, stat=1):
+    """One score per transcript: max over rollouts, positions and candidates.
+
+    This is the post's statistic. Positions are ragged because every rollout
+    reasons for a different number of sentences, so there is no fixed grid to
+    take a band over; the max is defined regardless.
+    """
+    per_position = _candidates(scores, n_eval_aware, group, stat)
+    with np.errstate(invalid="ignore"):
+        out = np.nanmax(per_position, axis=(1, 2))
+    return np.nan_to_num(out, nan=np.nanmin(out))
+
+
+def depth_bins(scores, n_eval_aware, group, n_bins=8, stat=1):
+    """[n, n_bins] by relative depth through the trace.
+
+    Absolute position index is not comparable across rollouts of different
+    lengths, so positions are bucketed by fraction of the way through. This is
+    what lets the argmax-versus-band selection check run on a rectangular
+    matrix without discarding any boundary.
+    """
+    per_position = _candidates(scores, n_eval_aware, group, stat)
+    n = per_position.shape[0]
+    out = np.full((n, n_bins), np.nan, dtype=np.float64)
+    for i in range(n):
+        flat = per_position[i]
+        real = ~np.isnan(flat)
+        for r in range(flat.shape[0]):
+            idx = np.flatnonzero(real[r])
+            if idx.size == 0:
+                continue
+            edges = np.linspace(0, idx.size, n_bins + 1).astype(int)
+            for b in range(n_bins):
+                chunk = flat[r, idx[edges[b]:edges[b + 1]]] if edges[b + 1] > edges[b] else []
+                if len(chunk):
+                    with np.errstate(invalid="ignore"):
+                        value = np.nanmax(chunk)
+                    if not np.isnan(value):
+                        out[i, b] = value if np.isnan(out[i, b]) else max(out[i, b], value)
+    column_min = np.nanmin(out, axis=0)
+    return np.where(np.isnan(out), column_min[None, :], out)
 
 
 def summarise(real, labels, n_perm, seed):
@@ -36,8 +77,7 @@ def summarise(real, labels, n_perm, seed):
 def rollout_curve(scores, n_eval_aware, labels):
     return [
         {"rollouts": k,
-         "argmax_auroc": metrics.band(
-             metrics.per_layer_auroc(group_scores(scores[:, :k], n_eval_aware, "eval_aware"), labels), 1)[0]}
+         "auroc": metrics.auroc(pooled(scores[:, :k], n_eval_aware, "eval_aware"), labels)}
         for k in range(1, scores.shape[1] + 1)
     ]
 
@@ -70,9 +110,16 @@ def main():
         "rollout_curve": rollout_curve(scores, n_eval_aware, labels),
     }
     for group in ("eval_aware", "neutral"):
-        payload[group] = summarise(group_scores(scores, n_eval_aware, group), labels, args.n_perm, args.seed)
+        one = pooled(scores, n_eval_aware, group)
+        payload[group] = {
+            "auroc": metrics.auroc(one, labels),
+            "p": metrics.empirical_p(
+                metrics.permutation_null(one[:, None], labels, args.n_perm, 1, args.seed),
+                metrics.auroc(one, labels)),
+            "by_depth": summarise(depth_bins(scores, n_eval_aware, group), labels, args.n_perm, args.seed),
+        }
 
-    monitor = group_scores(scores, n_eval_aware, "eval_aware").max(axis=1)
+    monitor = pooled(scores, n_eval_aware, "eval_aware")
     if args.verbalized_csv:
         verbal = verbalize.ensemble_signal(
             verbalize.signals_by_probe(verbalize.load_csv(args.verbalized_csv)))
@@ -89,8 +136,9 @@ def main():
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    ea, nt = payload["eval_aware"]["band"], payload["neutral"]["band"]
-    print(f"band AUROC: eval-aware {ea['auroc']:.3f} (p={ea['p']:.4f}), neutral {nt['auroc']:.3f} (p={nt['p']:.4f})")
+    ea, nt = payload["eval_aware"], payload["neutral"]
+    print(f"monitor AUROC: eval-aware {ea['auroc']:.3f} (p={ea['p']:.4f}), "
+          f"neutral control {nt['auroc']:.3f} (p={nt['p']:.4f})")
     print(f"-> {args.out}")
 
 

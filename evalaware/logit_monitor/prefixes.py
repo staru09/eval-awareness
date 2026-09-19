@@ -23,7 +23,12 @@ def load_sentences(path=None):
 
 
 def sentence_cuts(text, n_positions):
-    """Character offsets at n_positions evenly spaced sentence ends.
+    """Character offsets of sentence ends.
+
+    n_positions=0 (the default) scores every boundary, so traces of different
+    lengths give different counts and the caller pads. Passing a number
+    subsamples to a fixed grid instead, which makes the position axis
+    comparable across traces at the cost of skipping boundaries.
 
     The end of the text is always the final cut, so the whole trace is scored.
     Fixed width so every transcript yields the same [positions] axis and
@@ -31,6 +36,8 @@ def sentence_cuts(text, n_positions):
     therefore means relative depth through the trace, not absolute index.
     """
     ends = [m.end() for m in SENT_RE.finditer(text)] + [len(text)]
+    if not n_positions:
+        return ends
     idx = np.linspace(0, len(ends) - 1, n_positions).round().astype(int)
     return [ends[i] for i in idx]
 
