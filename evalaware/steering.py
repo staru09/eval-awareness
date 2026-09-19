@@ -3,13 +3,13 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .models import ModelSpec, followup_prompt
+from .models import ModelSpec, blocks, followup_prompt
 from .parsing import PARSE_FAILURE, resolve_answer
 
 
 class Steerer:
     def __init__(self, model, decoder_idx: int):
-        layers = model.model.layers
+        layers = blocks(model)
         if not 0 <= decoder_idx < len(layers):
             raise SystemExit(f"layer {decoder_idx} out of range 0..{len(layers) - 1}")
         self.module = layers[decoder_idx]
