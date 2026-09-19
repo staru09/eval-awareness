@@ -33,8 +33,10 @@ class PCAProbe(Probe):
     def from_pairs(cls, pos_acts, neg_acts):
         pos, neg = as_tensor(pos_acts), as_tensor(neg_acts)
         diffs = pos - neg
-        centred = diffs - diffs.mean(0)
-        _, _, v = torch.pca_lowrank(centred, q=min(8, centred.shape[1], centred.shape[0]))
+        # Uncentred on purpose. The contrast direction is the *mean* of the
+        # difference vectors, so subtracting that mean removes exactly the
+        # signal and leaves PC1 fitting noise.
+        _, _, v = torch.pca_lowrank(diffs, q=min(8, diffs.shape[1], diffs.shape[0]), center=False)
         direction = v[:, 0]
         bias = 0.5 * (pos.mean(0) + neg.mean(0))
         if ((pos - bias) @ direction).mean() < ((neg - bias) @ direction).mean():

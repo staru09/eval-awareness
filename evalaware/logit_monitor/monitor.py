@@ -7,7 +7,7 @@ import torch
 from evalaware.datasets import load_traces
 from evalaware.models import ModelSpec, load_model, prompt_only
 from evalaware.parsing import split_reasoning
-from logit_monitor.prefixes import cot_prefix, load_sentences, sentence_cuts
+from .prefixes import cot_prefix, load_sentences, sentence_cuts
 
 
 @torch.no_grad()
