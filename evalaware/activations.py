@@ -135,7 +135,7 @@ def generate_and_capture_vllm(model_path: str, spec: ModelSpec, rows: list[dict]
                               max_new_tokens: int = 4096, temperature: float = 0.7,
                               top_p: float = 0.9, capture: bool = True, gpu_mem: float = 0.85,
                               hidden_tmp: Path = Path("/nvme/_hidden_states"),
-                              sampling: dict | None = None) -> list[dict]:
+                              sampling: dict | None = None, capture_backend: str = "vllm") -> list[dict]:
     """Same outputs as generate_and_capture, using vLLM.
 
     Pass 1: a plain engine generates every reply in one batch, then shuts down.
@@ -143,6 +143,10 @@ def generate_and_capture_vllm(model_path: str, spec: ModelSpec, rows: list[dict]
     prompt + reply, which gives both readouts. Two engines because extraction
     reserves cache for every layer's hidden state, which would leave generation
     almost unbatched. Prefix caching stays off: cached blocks return wrong states.
+
+    Extraction memory grows with layers^2 x tokens (about 10 MB per token for an
+    8B model), so long thinking replies do not fit. capture_backend="hf" runs
+    pass 2 as one HF forward pass per row instead.
 
     Resumable: generated rows and rows with both .npz files are skipped.
     """
@@ -203,6 +207,25 @@ def generate_and_capture_vllm(model_path: str, spec: ModelSpec, rows: list[dict]
     todo = [r for r in rows if not ((out_dir / "activations" / f"{r['id']}.npz").exists()
                                     and (out_dir / "activations_prompt" / f"{r['id']}.npz").exists())]
     if not (capture and todo):
+        return entries
+    if capture_backend == "hf":
+        from .models import load_model
+
+        # Mamba layers without the fused kernels build one temporary that grows with
+        # tokens x chunk_size and another with (tokens / chunk_size)^2. For an 8k-token
+        # row on Nemotron 3 Nano, 128 needs 32 GB and 32 needs 128 GB; 96 peaks near 26 GB.
+        # ponytail: fixed 96, sized for ~8k-token rows; the balance point is about
+        # (tokens * mamba_head_dim) ** (1/3), recompute if rows get much longer.
+        model, _ = load_model(model_path, **({"chunk_size": 96} if getattr(cfg, "chunk_size", None) else {}))
+        with torch.no_grad():
+            for i, row in enumerate(todo, 1):
+                ids = torch.tensor([prompt_ids[row["id"]] + gen_ids[row["id"]]], device=model.device)
+                hidden = model(ids, output_hidden_states=True).hidden_states
+                _save_both(out_dir, row, [h[0] for h in hidden[1:]], len(prompt_ids[row["id"]]))
+                del hidden
+                torch.cuda.empty_cache()  # long rows on a big model otherwise run out of memory
+                if i % 10 == 0 or i == len(todo):
+                    print(f"captured activations for {i}/{len(todo)} rows (hf)")
         return entries
     norm = _final_norm(model_path)
     # Size to the longest real sequence, not the generation cap: extraction

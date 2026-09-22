@@ -27,7 +27,7 @@ def cmd_generate(args) -> None:
                     if getattr(args, k) is not None}
         entries = activations.generate_and_capture_vllm(
             args.model_path, _spec(args), rows, args.out_dir,
-            gpu_mem=args.gpu_mem, sampling=sampling, **common)
+            gpu_mem=args.gpu_mem, sampling=sampling, capture_backend=args.capture_backend, **common)
     else:
         model, tok = load_model(args.model_path, args.dtype)
         entries = activations.generate_and_capture(model, tok, _spec(args), rows, args.out_dir, **common)
@@ -367,6 +367,8 @@ def _add_generate(sub) -> None:
     g.add_argument("--no-activations", action="store_true")
     g.add_argument("--backend", default="hf", choices=["hf", "vllm"])
     g.add_argument("--gpu-mem", type=float, default=0.85, help="vLLM GPU memory fraction")
+    g.add_argument("--capture-backend", default="vllm", choices=["vllm", "hf"],
+                   help="with --backend vllm: who saves activations; hf for long replies on big models")
     # Sampling. Past top-p the flags are vLLM only; small thinking models loop without a presence penalty.
     g.add_argument("--temperature", type=float, default=0.7)
     g.add_argument("--top-p", type=float, default=0.9)

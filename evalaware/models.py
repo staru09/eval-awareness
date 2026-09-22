@@ -46,14 +46,14 @@ def load_tokenizer(model_path: str):
     return tok
 
 
-def load_model(model_path: str, dtype: str = "bfloat16"):
+def load_model(model_path: str, dtype: str = "bfloat16", **config_overrides):
     tok = load_tokenizer(model_path)
     if tok.pad_token_id is None:
         tok.pad_token = tok.eos_token
     tok.padding_side = "left"
 
     kwargs = dict(dtype=getattr(torch, dtype), device_map="auto", output_hidden_states=True,
-                  trust_remote_code=_needs_remote_code(model_path))
+                  trust_remote_code=_needs_remote_code(model_path), **config_overrides)
     failure = None
     for cls in (AutoModelForCausalLM, AutoModelForImageTextToText):
         try:

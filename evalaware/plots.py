@@ -30,6 +30,10 @@ SLUGS = {
     "phi-3-mini-128k": "Phi-3-mini-128k",
     "qwen3.5-0.8b": "Qwen3.5-0.8B",
     "ministral-3-3b-reasoning": "Ministral-3-3B-Reasoning",
+    "llama-3.1-8b": "Llama-3.1-8B",
+    "nemotron-3-nano-30b": "Nemotron-3-Nano-30B",
+    "olmo-3-7b-think": "Olmo-3-7B-Think",
+    "olmo-3.1-32b-think": "Olmo-3.1-32B-Think",
 }
 INK, INK2, MUTED, GRID, SURFACE, WARN = "#0B0B0B", "#52514E", "#898781", "#E1E0D9", "#FCFCFB", "#B4451F"
 
