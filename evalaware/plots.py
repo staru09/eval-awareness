@@ -17,11 +17,19 @@ COLORS = {
     "Gemma-4-12B-OBLITERATED": "#B4451F",
     "Llama-3.1-8B": "#7A7A55",
     "OBLITERATUS-qwen3-4b": "#898781",
+    "MiniCPM5-2B": "#0E7C86",
+    "Phi-3-mini-128k": "#6B4FA0",
+    "Qwen3.5-0.8B": "#5A8F29",
+    "Ministral-3-3B-Reasoning": "#C2410C",
 }
 SLUGS = {
     "qwen3-8b": "Qwen3-8B",
     "granite-4.2-30b": "granite-4.2-30b",
     "qwen3.6-27b-obliterated": "Qwen3.6-27B-OBLITERATED",
+    "minicpm5-2b": "MiniCPM5-2B",
+    "phi-3-mini-128k": "Phi-3-mini-128k",
+    "qwen3.5-0.8b": "Qwen3.5-0.8B",
+    "ministral-3-3b-reasoning": "Ministral-3-3B-Reasoning",
 }
 INK, INK2, MUTED, GRID, SURFACE, WARN = "#0B0B0B", "#52514E", "#898781", "#E1E0D9", "#FCFCFB", "#B4451F"
 
@@ -249,6 +257,21 @@ def null_controls(rows: list[dict], out: Path, use_band: bool) -> None:
     title = ("Band statistic against 1000 fresh random directions" if use_band
              else "Peak AUROC against its actual null models")
     _finish(fig, [ax], out, title, rect=(0, 0, 1, 0.94))
+
+
+def judge_rates(summary: dict, out: Path) -> None:
+    """Share of transcripts the judge marked eval-aware, eval vs real."""
+    groups = [("eval (label 1)", summary["by_label"]["1"]), ("real (label 0)", summary["by_label"]["0"])]
+    fig, ax = plt.subplots(figsize=(7, 2.8))
+    y = np.arange(len(groups))[::-1]
+    for yi, (name, g) in zip(y, groups):
+        ax.barh(yi, g["rate"], color=WARN if name.startswith("eval") else "#0E7C86", zorder=3)
+        ax.text(g["rate"] + 0.01, yi, f"{g['n_aware']}/{g['n']}", va="center", fontsize=10, color=INK)
+    ax.set_yticks(y, [n for n, _ in groups])
+    ax.set_xlim(0, 1.1)
+    ax.set_xlabel("Share judged eval-aware")
+    ax.grid(axis="x", color=GRID, zorder=0)
+    _finish(fig, [ax], out, f"Verbalized eval awareness ({summary['judge_model']} judge)", rect=(0, 0, 1, 0.88))
 
 
 def load_json(path: Path) -> dict:

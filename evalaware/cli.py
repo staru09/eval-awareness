@@ -15,16 +15,22 @@ def _write_json(path: Path, payload: dict) -> None:
 
 
 def _spec(args) -> ModelSpec:
-    return ModelSpec(hf_id=args.model_path, chat_template=True,
-                     enable_thinking=not getattr(args, "no_thinking", False))
+    return ModelSpec(hf_id=args.model_path, enable_thinking=not getattr(args, "no_thinking", False))
 
 
 def cmd_generate(args) -> None:
-    model, tok = load_model(args.model_path, args.dtype)
     rows = datasets.load_transcripts(args.dataset)
-    entries = activations.generate_and_capture(
-        model, tok, _spec(args), rows, args.out_dir,
-        max_new_tokens=args.max_new_tokens, capture=not args.no_activations)
+    common = dict(max_new_tokens=args.max_new_tokens, temperature=args.temperature,
+                  top_p=args.top_p, capture=not args.no_activations)
+    if args.backend == "vllm":
+        sampling = {k: getattr(args, k) for k in ("top_k", "min_p", "presence_penalty", "repetition_penalty")
+                    if getattr(args, k) is not None}
+        entries = activations.generate_and_capture_vllm(
+            args.model_path, _spec(args), rows, args.out_dir,
+            gpu_mem=args.gpu_mem, sampling=sampling, **common)
+    else:
+        model, tok = load_model(args.model_path, args.dtype)
+        entries = activations.generate_and_capture(model, tok, _spec(args), rows, args.out_dir, **common)
     print(f"wrote {len(entries)} transcripts to {args.out_dir}")
 
 
@@ -153,7 +159,7 @@ def cmd_steer(args) -> None:
     traces = datasets.load_traces(args.traces)
     ids = args.transcript_ids.split(",") if args.transcript_ids else [t["id"] for t in traces[:6]]
     payload = steering.run(
-        model, tok, ModelSpec(hf_id=args.model_path, chat_template=True, enable_thinking=False),
+        model, tok, ModelSpec(hf_id=args.model_path, enable_thinking=False),
         probe.load(args.probe), traces, question, ids,
         [int(x) for x in args.layers.split(",")],
         [float(x) for x in args.alphas.split(",")],
@@ -333,6 +339,16 @@ def cmd_plots(args) -> None:
     print(f"charts written to {charts}")
 
 
+def cmd_judge(args) -> None:
+    from . import judge
+
+    summary = judge.run(datasets.load_traces(args.traces), args.out_dir, args.model)
+    plots.judge_rates(summary, args.out_dir / "charts" / "judge_eval_awareness.png")
+    b = summary["by_label"]
+    print(f"judged eval-aware: eval {b['1']['n_aware']}/{b['1']['n']}, "
+          f"real {b['0']['n_aware']}/{b['0']['n']} -> {args.out_dir}")
+
+
 def _add_model_args(sub, name, fn, dtype=True):
     s = sub.add_parser(name)
     s.set_defaults(func=fn)
@@ -349,6 +365,14 @@ def _add_generate(sub) -> None:
     g.add_argument("--out-dir", type=Path, required=True)
     g.add_argument("--max-new-tokens", type=int, default=4096)
     g.add_argument("--no-activations", action="store_true")
+    g.add_argument("--backend", default="hf", choices=["hf", "vllm"])
+    g.add_argument("--gpu-mem", type=float, default=0.85, help="vLLM GPU memory fraction")
+    # Sampling. Past top-p the flags are vLLM only; small thinking models loop without a presence penalty.
+    g.add_argument("--temperature", type=float, default=0.7)
+    g.add_argument("--top-p", type=float, default=0.9)
+    for name, kind in (("top-k", int), ("min-p", float), ("presence-penalty", float),
+                       ("repetition-penalty", float)):
+        g.add_argument(f"--{name}", type=kind, default=None)
 
     c = _add_model_args(sub, "capture-prompt", cmd_capture_prompt)
     c.add_argument("--traces", type=Path, required=True)
@@ -399,6 +423,12 @@ def _add_analysis(sub) -> None:
     pl = sub.add_parser("plots")
     pl.set_defaults(func=cmd_plots)
     pl.add_argument("--output-dir", type=Path, default=Path("output"))
+
+    jd = sub.add_parser("judge")
+    jd.set_defaults(func=cmd_judge)
+    jd.add_argument("--traces", type=Path, required=True)
+    jd.add_argument("--out-dir", type=Path, required=True)
+    jd.add_argument("--model", default="gpt-4o-mini")
 
 
 def _add_probing(sub) -> None:

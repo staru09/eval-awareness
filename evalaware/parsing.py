@@ -4,7 +4,7 @@ import string
 THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 THINK_CLOSE_RE = re.compile(r"^(.*?)</think>", re.DOTALL)
 CHANNEL_HEADER_RE = re.compile(r"^\s*thought\s*\n", re.IGNORECASE)
-CHANNEL_CLOSE_TOKENS = ("<channel|>", "<|eom|>")
+CHANNEL_CLOSE_TOKENS = ("<channel|>", "<|eom|>", "[/THINK]")
 LABEL_RE = re.compile(r"<label>(.*?)</label>", re.DOTALL | re.IGNORECASE)
 
 PARSE_FAILURE = -1.0
@@ -18,12 +18,11 @@ def _token_id(tok, name: str) -> int | None:
 def _split_on_channel_token(gen_ids, tok) -> tuple[str, str] | None:
     """Split a channel-format trace on token ids rather than decoded text.
 
-    Covers gpt-oss (`<channel|>`) and Muse-Glimmer harmony (`<|eom|>`). Both
-    delimit the reasoning channel with special tokens that
-    skip_special_tokens=True removes, leaving the plain-text routing words
-    fused to the content: a Muse-Glimmer trace decodes as
-    " to=selfI should think.assistantHello.". Locating the `<|message|>`
-    boundary by id avoids having to unpick that.
+    Covers gpt-oss (`<channel|>`), Muse-Glimmer harmony (`<|eom|>`) and
+    Mistral reasoning models (`[/THINK]`). All close the reasoning with a
+    special token that skip_special_tokens=True removes, fusing reasoning and
+    answer in the decoded text (a Muse-Glimmer trace decodes as
+    " to=selfI should think.assistantHello."), so the split is done on ids.
     """
     ids = gen_ids.tolist()
     close_id = next((i for i in (_token_id(tok, n) for n in CHANNEL_CLOSE_TOKENS)
