@@ -1,29 +1,3 @@
-"""Build an eval/deploy transcript dataset from jjpn2/eval_awareness.
-
-Downloads the gated HuggingFace dataset behind "Large Language Models Often
-Know When They Are Being Evaluated", keeps the chat transcripts, and writes
-them in the schema the rest of the pipeline expects:
-
-    {id, prompt_id, source, category, label, text}
-
-Agentic transcripts are excluded: they carry tool turns and run to 200k+
-characters, which neither our activation capture nor a probe readout handles
-sensibly. Chat transcripts have a median of about 2.4k characters.
-
-Sampling is spread round-robin across source datasets rather than drawn at
-random. Every source in this dataset is single-class, so source predicts label
-perfectly; spreading the draw is what makes leave-one-source-out evaluation
-possible, and LOSO is the only honest generalisation number here.
-
-Writes dataset_jjpn2.json by default. The original 20-transcript dataset.json
-is left alone, since committed results depend on it.
-
-Requires `hf auth login` (the dataset is gated) and `pip install datasets`.
-
-Usage:
-    python data/build_dataset.py --n-per-class 50
-"""
-
 import argparse
 import json
 import random
@@ -34,8 +8,7 @@ from pathlib import Path
 from huggingface_hub import hf_hub_download
 
 REPO = "jjpn2/eval_awareness"
-# Published in the repo's own scripts/decrypt.sh; it deters scrapers rather
-# than protecting anything.
+
 ZIP_PASSWORD = b"isthisreallythepassword"
 ROLE_LABEL = {"system": "System", "user": "User", "assistant": "Assistant", "tool": "Tool"}
 
@@ -64,29 +37,39 @@ def turn_text(content) -> str:
     return ""
 
 
-def render(record: dict) -> str:
+def render(record: dict, plain: bool = False) -> str:
     """Flatten the conversation into one block of text.
 
     The whole transcript is the evidence for whether this was an evaluation, so
     the whole transcript is what gets probed. Using only the first user turn
     would discard the assistant's behaviour, which is where much of the signal
     lives.
+
+    plain keeps the system and user turns' text with no role labels. The
+    pipeline sends `text` as one user message, so the system prompt and the
+    query arrive together in a single user turn.
     """
     parts = []
     for turn in record.get("input") or []:
         content = turn_text(turn.get("content"))
-        if content:
+        if not content:
+            continue
+        if plain:
+            if turn.get("role") in ("system", "user"):
+                parts.append(content)
+        else:
             parts.append(f"{ROLE_LABEL.get(turn.get('role'), turn.get('role'))}: {content}")
     return "\n\n".join(parts)
 
 
-def by_source(records: list[dict], label: int, max_chars: int) -> dict[str, list[dict]]:
+def by_source(records: list[dict], label: int, max_chars: int,
+              plain: bool = False) -> dict[str, list[dict]]:
     groups = defaultdict(list)
     for record in records:
         meta = record.get("metadata", {})
         if int(bool(meta.get("eval_category"))) != label:
             continue
-        text = render(record)
+        text = render(record, plain)
         if not (200 <= len(text) <= max_chars):
             continue
         groups[meta.get("category") or "unknown"].append({"record": record, "text": text})
@@ -127,15 +110,24 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--cache-dir", type=Path, default=Path("data/.jjpn2_cache"))
     ap.add_argument("--out", type=Path, default=Path("data/dataset_jjpn2.json"))
+    ap.add_argument("--no-assistant", action="store_true",
+                    help="drop transcripts that contain an assistant turn")
+    ap.add_argument("--plain", action="store_true",
+                    help="system prompt and user text joined, no role labels")
     args = ap.parse_args()
 
     rng = random.Random(args.seed)
     records = [r for r in fetch(args.cache_dir) if is_chat(r)]
     print(f"{len(records)} chat transcripts in the dataset")
+    if args.no_assistant:
+        records = [r for r in records if not any(
+            t.get("role") == "assistant" and turn_text(t.get("content"))
+            for t in r.get("input") or [])]
+        print(f"{len(records)} without an assistant turn")
 
     rows = []
     for label in (1, 0):
-        groups = by_source(records, label, args.max_chars)
+        groups = by_source(records, label, args.max_chars, args.plain)
         picked = draw(groups, args.n_per_class, rng)
         if len(picked) < args.n_per_class:
             raise SystemExit(
