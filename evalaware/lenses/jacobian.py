@@ -1,18 +1,3 @@
-"""Jacobian lens, through the reference implementation (jlens).
-
-    lens_l(h) = unembed( J_l @ h ),   J_l = E[ d h_final / d h_l ]
-
-J_l is the model's input-output Jacobian averaged over generic web text; the
-readout is the tokens a residual vector at block l is disposed to make the
-model say. jlens computes it exactly with autograd, from the last block's
-pre-norm output, averaged over source positions (the first 16, attention
-sinks, skipped) with the effect summed over later positions, and `unembed`
-applies the model's own final norm once. Pre-fitted lenses for many open
-models are on the Hub, so no fitting data is needed for those.
-
-Install: uv pip install -e ../jacobian-lens   (or put it on PYTHONPATH)
-"""
-
 import torch
 
 LENS_REPO = "neuronpedia/jacobian-lens"
