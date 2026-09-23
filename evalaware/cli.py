@@ -339,6 +339,40 @@ def cmd_plots(args) -> None:
     print(f"charts written to {charts}")
 
 
+def cmd_train_probes(args) -> None:
+    import torch
+
+    from .linear_probes import PROBES, cosine, loso_sweep
+
+    rows = datasets.load_transcripts(args.dataset)
+    acts = _stack_activations(args.activations_dir, [r["id"] for r in rows], args.pooling)
+    if acts is None:
+        raise SystemExit(f"missing activation files in {args.activations_dir}")
+    labels = np.array([int(r["label"]) for r in rows])
+    device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
+    res = loso_sweep(torch.from_numpy(acts).transpose(0, 1), labels, [r["source"] for r in rows],
+                     PROBES[args.probe], device=device)
+    per_layer = [metrics.auroc(s, labels) for s in res["scores"]]
+    band_auroc, band_layer = metrics.band(np.array(per_layer), args.band_width)
+    layers = [{"layer": l, "auroc": per_layer[l],
+               "accuracy": float(((res["scores"][l] > 0.5) == labels).mean())} for l in range(len(per_layer))]
+    if args.contrast_probe:  # probe.pt keys layers by hidden_states index, 0 = embeddings
+        real = probe.load(args.contrast_probe)["real"]
+        for row in layers:
+            row["cosine_vs_contrastive"] = cosine(res["directions"][row["layer"]], real[row["layer"] + 1])
+    peak = max(layers, key=lambda r: r["auroc"])
+    _write_json(args.out, {
+        "summary": {"probe": args.probe, "pooling": args.pooling, "activations_dir": str(args.activations_dir),
+                    "n_rows": len(labels), "n_groups": len(set(r["source"] for r in rows)),
+                    "evaluation": "leave-one-source-out, out-of-fold scores",
+                    "peak_layer": peak["layer"], "peak_auroc": peak["auroc"], "peak_accuracy": peak["accuracy"],
+                    "band_width": args.band_width, "band_auroc": band_auroc, "band_start_layer": band_layer},
+        "layer_results": layers,
+    })
+    print(f"{args.probe} {args.pooling}: peak L{peak['layer']} AUROC {peak['auroc']:.3f} "
+          f"(acc {peak['accuracy']:.2f}), band {band_auroc:.3f} @L{band_layer} -> {args.out}")
+
+
 def cmd_judge(args) -> None:
     from . import judge
 
@@ -425,6 +459,17 @@ def _add_analysis(sub) -> None:
     pl = sub.add_parser("plots")
     pl.set_defaults(func=cmd_plots)
     pl.add_argument("--output-dir", type=Path, default=Path("output"))
+
+    tp = sub.add_parser("train-probes", help="Geometry-of-Truth probes on saved activations, leave-one-source-out")
+    tp.set_defaults(func=cmd_train_probes)
+    tp.add_argument("--activations-dir", type=Path, required=True)
+    tp.add_argument("--dataset", type=Path, default=None)
+    tp.add_argument("--probe", default="mm", choices=["mm", "lr"])
+    tp.add_argument("--pooling", default="last", choices=["last", "mean"])
+    tp.add_argument("--contrast-probe", type=Path, default=None, help="probe.pt, to report cosine per layer")
+    tp.add_argument("--band-width", type=int, default=3)
+    tp.add_argument("--device", default=None)
+    tp.add_argument("--out", type=Path, required=True)
 
     jd = sub.add_parser("judge")
     jd.set_defaults(func=cmd_judge)
