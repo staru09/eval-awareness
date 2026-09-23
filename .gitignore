@@ -9,3 +9,4 @@ dashboard/dev.log
 *.txt
 *.zip
 *.md
+data/
