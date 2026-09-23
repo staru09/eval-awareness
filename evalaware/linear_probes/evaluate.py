@@ -1,6 +1,47 @@
 import numpy as np
+import torch
 
-from .base import cosine
+from .base import as_tensor, cosine
+
+
+def center(train, *others):
+    """Subtract the training rows' mean from every set (Geometry of Truth centres acts)."""
+    mu = train.mean(0)
+    return (train - mu, *(o - mu for o in others))
+
+
+def loso_sweep(acts, labels, groups, probe_cls, device="cpu", **kwargs):
+    """Leave-one-group-out, per layer, for a pooled probe.
+
+    acts: [n_layers, n_rows, d_model]; labels: 0/1 per row; groups: e.g. the
+    source of each row. Each group is held out once; the probe is trained on
+    the rest (centred with their own mean) and scores the held-out rows. In
+    this data every source is single-class, so holding out a whole source is
+    what stops the probe from winning by recognising source style.
+
+    Returns per-layer out-of-fold scores, plus a direction per layer trained on
+    all rows for comparing against other directions.
+    """
+    _check_pooled(probe_cls)
+    acts = as_tensor(acts)
+    labels = np.asarray(labels)
+    groups = np.asarray(groups)
+    y = torch.as_tensor(labels, dtype=torch.float32)
+    scores = np.zeros((len(acts), len(labels)), dtype=np.float32)
+    directions = []
+    # ponytail: one probe per layer per fold in a Python loop; batch layers into one
+    # optimiser if LR sweeps over big models get slow.
+    for layer, x in enumerate(acts):
+        for g in np.unique(groups):
+            test = groups == g
+            if len(np.unique(labels[~test])) < 2:
+                raise ValueError(f"holding out {g!r} leaves one class in training")
+            train_x, test_x = center(x[~test], x[test])
+            probe = fit(probe_cls, train_x, y[~test], device=device, **kwargs)
+            with torch.no_grad():
+                scores[layer, test] = probe(test_x).cpu().numpy()
+        directions.append(fit(probe_cls, center(x)[0], y, device=device, **kwargs).direction.cpu())
+    return {"scores": scores, "directions": torch.stack(directions)}
 
 
 def _check_pooled(probe_cls):

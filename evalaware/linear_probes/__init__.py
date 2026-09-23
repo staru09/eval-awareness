@@ -1,7 +1,7 @@
 from .attention import AttnLiteProbe
 from .base import Probe, cosine
 from .ccs import PCAProbe
-from .evaluate import cross_dataset, direction_similarity, layer_sweep
+from .evaluate import center, cross_dataset, direction_similarity, layer_sweep, loso_sweep
 from .logistic import LRProbe
 from .mass_mean import MMProbe
 
@@ -14,5 +14,5 @@ PROBES = {
 
 __all__ = [
     "PROBES", "Probe", "MMProbe", "LRProbe", "PCAProbe", "AttnLiteProbe",
-    "cosine", "layer_sweep", "cross_dataset", "direction_similarity",
+    "cosine", "center", "layer_sweep", "loso_sweep", "cross_dataset", "direction_similarity",
 ]
