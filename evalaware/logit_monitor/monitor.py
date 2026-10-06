@@ -154,7 +154,7 @@ def main():
     traces = load_traces(args.traces)
     gen_cfg = traces[0].get("generation_config") or {}
     model, tok = load_model(args.model_path, args.dtype)
-    spec = ModelSpec(hf_id=args.model_path, chat_template=True, enable_thinking=not args.no_thinking)
+    spec = ModelSpec(hf_id=args.model_path, enable_thinking=not args.no_thinking)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     dump = args.dump or args.out.with_suffix(".rollouts.jsonl")
