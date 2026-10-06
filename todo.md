@@ -1,207 +1,187 @@
-# Todo: linear probes and the Jacobian lens for evaluation awareness
+# Todo: evaluation-awareness probes on Qwen3-8B
 
-Scope for this round of work. Two models only:
+Updated 2026-10-06, after three runs. Scope narrowed to `Qwen/Qwen3-8B` only,
+36 layers, 4096 dims. Llama-3.2-3B-Instruct is out of scope for now: it has no
+reasoning channel, so the monitor and judge arms cannot run on it.
 
-- `Qwen/Qwen3-8B`, 36 layers, 4096 dims, has a reasoning channel
-- `meta-llama/Llama-3.2-3B-Instruct`, 28 layers, 3072 dims, no reasoning channel
+Everything from the three runs is on the Hub, private:
+`FiendHunter/qwen3-8b-eval-awareness-probe`, 44 files, 788 MB, including the
+activations as tarballs. Scoring a new direction against them needs no GPU.
 
-Methods: linear probes following the Geometry of Truth repo
-(https://github.com/saprmarks/geometry-of-truth) and the Jacobian lens
-(https://github.com/anthropics/jacobian-lens).
+## What we ran and what it showed
 
-The design questions behind this plan are still open, see **Open decisions** at
-the end. Where an answer was needed to write anything down, the assumption is
-marked **assumed** and can be changed.
+The probe is the 16 contrastive pairs, mean of the deployment activations minus
+mean of the evaluation activations, per layer, unit normalised, read at the last
+token. Nothing is trained, so every test prompt stayed unseen. The pairs are
+Table 12 of Hua et al. 2025 and our file is byte identical to the one released
+with Heidari et al. 2026.
 
-## What we are claiming
+**Run 1, 100 prompts, five evaluation sources against WildChat and LMSYS.**
+Peak 0.835 AUROC at layer 23. Matches the published ceiling for this recipe, so
+the implementation is right. Not trustworthy on its own: the evaluation prompts
+were longer, and word count alone reached 0.675 on that split.
 
-**assumed:** the spine is a clean reproduction and correction. The VEA writeups
-claim 100 percent probe accuracy on eval versus deployment, and a signal crash
-at a late layer. That number is almost certainly inflated by training and
-testing inside one source. We reproduce it on two open models under a protocol
-that holds out the source, report what survives, and get the layer and token map
-out of the same sweep.
+**Run 2, the format control, 100 prompts in four groups of 25, lengths matched.**
+Two groups are real evaluations, two are real people, and within each pair one
+is written in exam style and one normally. Comparing the two groups of real
+people against each other isolates writing style, because neither is an
+evaluation.
 
-Current state of our own result, for context: the internal probe separates eval
-from deployment, and the verbalized signal does not track it. Peak correlation
-sits inside the random direction band in 5 of 6 model by readout cells. We
-cannot yet say where that break happens.
+- Reading at the last token: 0.311 on style alone. That reading is a style
+  detector.
+- Reading by averaging over the prompt: 0.017 and 0.063 on style, which is
+  nothing, while still separating evaluations from real people at 0.271 and
+  0.321 with style held fixed, in both directions and under both templates.
 
-## Phase 0: environment, done 2026-10-06
+That second line is the only positive result we have. It says something in the
+model responds to a prompt being an evaluation and not to how it is dressed.
 
-- `/nvme` was wiped by the VM restart again. Ownership fixed, `/nvme/hf-cache`,
-  `/nvme/scratch` and `/nvme/.cache` remade.
-- Repo cloned to `/nvme/eval-awareness` at 81e1b99, venv built with uv.
-- Qwen3-8B, 16 GB, and Llama-3.2-3B-Instruct, 12 GB, in `/nvme/hf-cache`.
-  Configs and tokenizers load.
-- `data/dataset_jjpn2_full.json` built: 260 rows, 130 eval and 130 deployment,
-  31 sources, median 631 characters.
+**Run 3, eleven evaluation sources against one pool of 50 real messages, 308
+prompts, all lengths matched.** Only ARC and MMLU clear their random-direction
+floor in more than two of four readouts. We stripped the `Question / Choices /
+Answer` wrapper first, so it is not formatting. What those two share is phrasing:
+a short factual question with no task, no context and nobody addressed. MASK and
+PrivacyLens clear no floor at all, and both are safety evaluations written to
+look like ordinary requests.
 
-Open item from this phase: uv resolved `datasets 1.1.1`, which crashes on modern
-pyarrow. Forced to 5.1.0 by hand. Pin `datasets>=4.0` in `pyproject.toml` or the
-next clean rebuild hits the same wall.
+With 308 prompts the peak layer moved to layer 3 of 36, which is 0.08 of depth
+and too early to be anything but lexical.
 
-## Phase 1: pinpoint the layer and the token pattern
+**Conclusion.** The probe mostly detects exam-style question phrasing. There is
+a weaker signal that survives the style control, but at 25 prompts per group a
+random direction often matched it, so it is suggestive and not established.
 
-This comes first because every later arm needs one layer and one token position,
-and we currently pick them by taking the best cell of a sweep on the same metric
-we then report. That is selection on the test set.
+## Next steps, in priority order
 
-- [ ] Capture per-token activations, not just the four reductions we have now.
-      `activations.py` saves only last token and mean token, over the prompt and
-      over prompt plus answer. A token pattern sweep needs every position for at
-      least one layer, or a named set of positions for all layers. This is new
-      code and much more disk.
-- [ ] Token patterns to compare: last prompt token, last non-special token,
-      final punctuation, mean over the user turn, mean over the whole prompt,
-      and the assistant turn's first generated token.
-- [ ] Sweep every layer against every token pattern on a tuning split.
-- [ ] Report three numbers, not one: the cell chosen on the tuning split scored
-      on an untouched test split, the best three layer band from
-      `metrics.band`, and a fixed a priori cell.
-- [ ] The a priori cell is about 0.4 of depth, which is layer 14 of 36 on
-      Qwen3-8B and layer 11 of 28 on Llama-3.2-3B. Geometry of Truth hardcodes
-      layer 13 of 32 for Llama-2-7B, 14 of 40 for 13B, 27 of 80 for 70B. Do not
-      use two thirds of depth, that was wrong.
-- [ ] Compare the two models in relative depth, never by absolute layer index.
+### 1. Scale the format control. This is the decisive run.
 
-**assumed:** the sweep runs on prompt only activations, one forward pass per
-prompt, no generation in the loop. Generation is only needed later for the judge
-and the lens arms.
+Everything else is worth less until this is settled. At 25 prompts per group the
+best of ten random directions reached 0.233 to 0.498, above most of our real
+numbers, so no single comparison in run 2 is individually meaningful.
 
-## Phase 2: make the probes faithful to the paper
+- [ ] Raise to 100 prompts per group, 400 total. The pools hold 100 to 350
+      usable items per length bin, so this needs no new data, only a change to
+      `PER_BIN` and `PER_GROUP` in `data/build_2x2.py`.
+- [ ] Draw 1000 random directions instead of 10. Our builder defaults to
+      `--n-random 10`; published work uses a thousand and the floor rises with
+      every draw. Expect several groups that currently clear their floor to stop
+      clearing it.
+- [ ] Keep lengths matched. After matching, length alone sits at 0.466, so
+      nothing in the result can be length.
+- [ ] Report the style-only comparison as the headline number, not the
+      uncontrolled one.
+- [ ] Decision rule fixed in advance: if the style-held-fixed effect stays near
+      0.30 with the bigger sample and a thousand random directions, the signal is
+      real. If it falls inside the floor, it was not.
 
-Our `evalaware/linear_probes/` already matches the paper exactly for mass mean
-and logistic regression, down to AdamW at lr 1e-3, weight decay 0.1, 1000
-epochs, bias free. Four deviations need a decision each.
+### 2. Replace the format control with data we trust
 
-- [ ] `ccs.py` is a PCA probe, not CCS. The real CCS loss is consistency plus
-      confidence on contrast pairs, with a sign fix from labels afterwards.
-      Either implement it or stop calling the arm CCS.
-- [ ] The covariance corrected mass mean variant exists but no evaluation path
-      ever switches it on. The paper uses it for in distribution cells and the
-      plain direction out of distribution. Ours therefore reports the paper's
-      `iid=False` setting everywhere, including the diagonal.
-- [ ] We centre by the training fold's mean. The paper centres each dataset by
-      its own mean before splitting. Ours is the leak free version and theirs is
-      the published one. Pick one and say which.
-- [ ] `cross_dataset` never centres at all, so that path runs raw activations
-      against bias free probes. That is a bug, not a choice.
-- [ ] We report AUROC. The paper reports accuracy at threshold 0.5 and never
-      AUROC. Report both or no number of ours is comparable to theirs.
+The 2x2 set is one author, no listed affiliation, a workshop paper
+(arXiv 2603.19426, MIT licence), and the rewrites in the critical group were
+generated by **DeepSeek-V3**, not written by people. That group carries the whole
+argument of run 2, so its provenance is a real weakness.
 
-## Phase 3: datasets
+- [ ] Build our own style-controlled set: take real user messages, rewrite each
+      into exam form and keep both versions. Our rewrites should come from a
+      different model than DeepSeek-V3, or better, be written by hand for a
+      smaller set.
+- [ ] Keep the published set as a second opinion rather than the only evidence.
+- [ ] Add XSTest as a third control: safe prompts that sound dangerous, so style
+      says evaluation and content says harmless.
 
-Hard fact: we have exactly one upstream source wired up, `jjpn2/eval_awareness`.
-The 31 "sources" inside `dataset_jjpn2.json` are categories within that one
-dataset. Nothing else in `vea_datasets.csv` has a loader.
+### 3. Test whether the model uses the direction, not just whether we can read it
 
-Ceiling of that source: 130 eval and 142 deployment transcripts. 228 of the 500
-chat records are dropped by the 200 character minimum in `build_dataset.py`, and
-they are mostly genuine one line prompts. Lowering the floor to 50 roughly
-doubles the usable set.
+This is the biggest gap in what we have. Reading something out of the
+activations does not show the model acts on it. Without this we can only say the
+information is present, never that the model knows it is being tested.
 
-- [ ] Decide whether to lower the length floor. It is a one line change and it
-      is the cheapest way to double our data.
-- [ ] Train on the source labelled split, which is what we have.
-- [ ] Add at least one deployment control with a loader: WildChat or
-      LMSYS-Chat-1M, topic matched. Both are marked high priority control in
-      `vea_datasets.csv`.
-- [ ] Add XSTest as the control that matters most: safe prompts that sound
-      dangerous, so format says eval and content says harmless.
-- [ ] Add a cue controlled set, same content under eval framing, casual framing
-      and neutral framing. A probe that separates these cannot be reading topic
-      or format. This is the test that decides whether our accuracy is real.
-- [ ] Consider the Needham et al. eval awareness transcripts, 1,000 items with
-      externally defined labels, for a transfer test we did not construct.
-- [ ] Report three accuracies every time: within source, leave one source out,
-      and on the cue controlled pairs.
+- [ ] Add the direction to the residual stream during generation and measure
+      whether behaviour moves.
+- [ ] This is a rewrite of `steering.py`, not a rerun. Geometry of Truth adds the
+      direction across a range of layers at two specific token positions, scaled
+      so the mean negative activation lands on the mean positive one, and reports
+      a normalised indirect effect. Ours adds to the whole residual stream at one
+      layer, scales by alpha times the mean activation norm, and parses a free
+      text answer with no random-direction control.
+- [ ] Use a random direction at matched magnitude as the control. Published
+      results here are mostly negative, under 5 percent behavioural recovery for
+      a fitted probe, so a null is a plausible and publishable outcome.
 
-## Phase 4: the Jacobian lens arm
+### 4. Try the larger pair set
 
-The upstream repo is already cloned at `Z:\Sep-26\VEA_experiments\jacobian-lens`.
-It needs `transformers>=5.5`, and the VM has 5.18.0.
+- [ ] Build the direction from Nguyen et al.'s 203 pairs instead of our 16, and
+      run the identical style-controlled test. Their set generalised better than
+      anything else in their own comparison.
+- [ ] Note the two sets are not interchangeable in shape. Ours are framing
+      prefixes ending in a colon, read at that colon. Theirs are yes/no questions
+      where the readout is the answer letter token. The readout code has to
+      change with the set.
+- [ ] If 203 pairs beat 16 on the style-controlled number, the weakness was the
+      pair set. If not, it is the method.
 
-- [ ] Push the probe direction at the chosen layer through `J_l` and read the
-      vocabulary, with `direction_logits`. That is the dissociation measurement:
-      does the eval direction decode to eval words at all.
-- [ ] Qwen3-8B has a pre fitted lens in our `PREFITTED` table.
-      Llama-3.2-3B-Instruct does not, only Llama-3.1-8B-Instruct does. Fitting
-      our own costs one forward and `d_model / 8` backward passes per prompt,
-      which is 384 per prompt at 3072 dims, times about 100 prompts. Budget it
-      as a one off GPU job. Fitting all layers costs the same as fitting one.
-- [ ] Pin the lens version. Our download passes no `revision`, so the file is
-      unpinned, and our filenames differ from the ones the upstream walkthrough
-      uses. Two runs months apart could silently use different lenses.
-- [ ] Controls the README prescribes but no code implements: random directions,
-      the logit lens baseline with `use_jacobian=False`, and fixed word list
-      ranks.
-- [ ] Our wrapper reads one position only. The position by layer viewer from
-      2026-09-23 came from a throwaway script that is not in the repo. If we
-      want that view again it is new code either way.
+### 5. Finish the logit monitor
 
-## Phase 5: ablations
+Stopped at 19 of 100, rollouts kept, so it resumes rather than restarts.
 
-- [ ] Smaller models of the same family, to see whether the layer sits at the
-      same relative depth. Qwen3.5-0.8B already has two runs on disk.
-- [ ] Base versus instruct. The VEA claim is that base models detect eval as
-      well as aligned ones, which would put the phenomenon in pre training. This
-      is the single most interesting ablation and it needs a base checkpoint
-      that matches one of our two models.
-- [ ] Finetuning stages, if any checkpoint series is available for either model.
-- [ ] Steering. Note this is a rewrite, not a rerun. Geometry of Truth adds the
-      direction at every layer from 8 up to the probe layer, at two specific
-      token positions, scaled so the mean negative activation lands on the mean
-      positive one, and reports a normalised indirect effect on
-      `P(" TRUE") - P(" FALSE")`. Our `steering.py` adds to the whole residual
-      stream at one layer, scales by an alpha sweep times the mean activation
-      norm, and measures a parsed free text answer with no random direction
-      control. Those are different experiments.
-- [ ] OpenAI judge on reasoning chains, as an ablation. `evalaware/judge.py`
-      already works and has run on 10 models at 50 traces each with gpt-4o-mini.
-      It asks two things: did the model say it was being tested, and can a judge
-      tell eval from deployment from the rollout alone with the prompt hidden.
-      **assumed:** this arm runs on Qwen3-8B only, because Llama-3.2-3B-Instruct
-      has no reasoning channel and forcing it to narrate would change the one
-      thing we are measuring.
+- [ ] Batch the ten candidate sentences at each cut into one forward pass. They
+      are ten separate passes today, so this is a straight ten times on the slow
+      part.
+- [ ] Generate with vLLM rather than HF `generate` at batch size 1.
+- [ ] Together these should take it from 70 seconds a prompt to a few seconds.
+- [ ] This arm gives the verbalised signal, which is what makes the three-way
+      coupling between probe, monitor and spoken answer possible. That coupling
+      was the original point of the whole plan and is still untested.
 
-For reference, the judge results we already have. Rate of the model saying it is
-being tested, eval prompts first, 50 transcripts each:
+### 6. Decode the direction through the Jacobian lens
 
-- Qwen3.5-0.8B 0.72 and 0.48, Olmo-3.1-32B 0.60 and 0.40, MiniCPM5-2B 0.60 and
-  0.36, Olmo-3-7B 0.44 and 0.24
-- Qwen3-8B 0.32 and 0.20, Ministral-3-3B 0.24 and 0.16, Nemotron-30B 0.20 and
-  0.16
-- granite-4.2-30b 0.36 and 0.48, which is backwards, Llama-3.1-8B 0.08 and 0.04,
-  Phi-3-mini 0.04 and 0.04
+Cheap, and it independently checks the run 3 finding.
 
-Confidence against the true label stays near chance everywhere, 0.45 to 0.63.
-The blind classifier does better, 0.53 to 0.68. One run is still unjudged:
-`output/2026-09-22_Qwen3.5-0.8B_contrastive-probe/local/qwen3.5-0.8b/`.
+- [ ] Push the direction at the chosen layer through `J_l` and read the
+      vocabulary with `direction_logits`. If it decodes to question-shaped words
+      rather than evaluation words, that confirms the register result from a
+      different angle.
+- [ ] Qwen3-8B has a pre-fitted lens in our `PREFITTED` table, so no fitting job
+      is needed.
+- [ ] Pin the lens version. Our download passes no `revision`, so two runs months
+      apart could silently use different lenses.
 
-## Known problems carried in
+### 7. Ablations, once the above has a result worth ablating
 
-- `echo_end` in the logit monitor fails on prompts where the model's copy of the
-  question diverges from the original. The deployment half of the smoke run is
-  invalid because of it. A fix was drafted and rejected, so it is untouched.
-- No run kept its activations. Only the legacy `output/local/qwen3-8b/` has
-  them, 20 transcripts. Every new capture has to bring activations back from the
-  VM, not just the derived scores.
-- `.env` holds live looking OpenAI and Anthropic keys in plaintext. It is
-  gitignored and untracked, so nothing is exposed in the repo.
+- [ ] Base versus instruct. The claim in the VEA writeups is that base models
+      detect evaluation as well as aligned ones, which would place the phenomenon
+      in pre-training. Needs `Qwen/Qwen3-8B-Base`.
+- [ ] Smaller models of the same family, compared in relative depth and never by
+      absolute layer index.
+- [ ] The OpenAI judge on reasoning chains. `evalaware/judge.py` already works
+      and has run on ten models at 50 traces each.
+
+## Engineering debt that is costing GPU time
+
+Everything we ran was batch size 1 on a 95 GB H100, which is why the monitor
+took 70 seconds a prompt.
+
+- [ ] Batch `capture-prompt`. It does one forward pass per prompt today.
+- [ ] Load the model once per pipeline, not once per template.
+- [ ] Log `nvidia-smi` during the next long run so we have a real utilisation
+      number instead of an estimate.
+
+## Carried problems
+
+- `echo_end` in the logit monitor fails when the model's copy of the question
+  diverges from the original. A fix was drafted and rejected, so it is untouched.
+- `/nvme` is wiped by every VM restart. Anything not pushed to the Hub or pulled
+  down is lost. This has now happened twice in one day.
+- uv resolves `datasets 1.1.1`, which crashes on modern pyarrow. Forced to 5.1.0
+  by hand each rebuild. Pin `datasets>=4.0` in `pyproject.toml`.
+- `.env` holds live looking OpenAI and Anthropic keys in plaintext. Gitignored
+  and untracked, so nothing is exposed in the repo.
 
 ## Open decisions
 
-These were asked and not yet answered. Everything above that depends on them is
-marked assumed.
-
-1. Is the headline claim the reproduction and correction, the localisation of
-   where the signal stops feeding the output, or the methodological point that
-   probe accuracy is mostly dataset recognition.
-2. Does the eval label come from the source dataset, from cue controlled pairs,
-   or from external transcripts.
-3. Do we probe the prompt alone, or the prompt plus the model's own output.
-4. How do we pick the layer and token without selecting on the reported metric.
-5. Which model do we calibrate on, and must the other agree.
-6. Does the judge arm run on Qwen3-8B only.
-7. How does this file get committed, given `.gitignore` excludes `*.md`.
+1. Do we keep the published 2x2 set as the format control, build our own, or
+   both.
+2. Is the headline claim the positive one, that a style-independent signal
+   exists, or the negative one, that probes built this way miss the safety
+   evaluations that matter.
+3. Does the causal test run before or after the scaled format control. Running it
+   first risks steering a direction that turns out to be noise.
