@@ -10,3 +10,4 @@ dashboard/dev.log
 *.zip
 *.md
 data/
+!todo.md
