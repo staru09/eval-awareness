@@ -62,17 +62,18 @@ numbers, so no single comparison in run 2 is individually meaningful.
 - [ ] Raise to 100 prompts per group, 400 total. The pools hold 100 to 350
       usable items per length bin, so this needs no new data, only a change to
       `PER_BIN` and `PER_GROUP` in `data/build_2x2.py`.
-- [ ] Draw 1000 random directions instead of 10. Our builder defaults to
-      `--n-random 10`; published work uses a thousand and the floor rises with
-      every draw. Expect several groups that currently clear their floor to stop
-      clearing it.
+- [ ] Draw 100 random directions instead of 10. Our builder defaults to
+      `--n-random 10`. The floor rises with every draw, so expect some groups
+      that currently clear their floor to stop clearing it. Published work uses a
+      thousand, so 100 is a weaker bar than theirs and the comparison should say
+      so.
 - [ ] Keep lengths matched. After matching, length alone sits at 0.466, so
       nothing in the result can be length.
 - [ ] Report the style-only comparison as the headline number, not the
       uncontrolled one.
 - [ ] Decision rule fixed in advance: if the style-held-fixed effect stays near
-      0.30 with the bigger sample and a thousand random directions, the signal is
-      real. If it falls inside the floor, it was not.
+      0.30 with 400 prompts and 100 random directions, the signal is real. If it
+      falls inside the floor, it was not.
 
 ### 2. Replace the format control with data we trust
 
@@ -95,6 +96,9 @@ This is the biggest gap in what we have. Reading something out of the
 activations does not show the model acts on it. Without this we can only say the
 information is present, never that the model knows it is being tested.
 
+- [ ] Runs on the same 400 prompts as the scaled format control, so the probe
+      being steered is the one that has just been tested at that size, and the
+      steered and unsteered results sit on identical data.
 - [ ] Add the direction to the residual stream during generation and measure
       whether behaviour moves.
 - [ ] This is a rewrite of `steering.py`, not a rerun. Geometry of Truth adds the
@@ -183,5 +187,5 @@ took 70 seconds a prompt.
 2. Is the headline claim the positive one, that a style-independent signal
    exists, or the negative one, that probes built this way miss the safety
    evaluations that matter.
-3. Does the causal test run before or after the scaled format control. Running it
-   first risks steering a direction that turns out to be noise.
+3. Settled: the causal test runs on the same 400 prompts as the scaled format
+   control, so it comes after it and reuses the set.
