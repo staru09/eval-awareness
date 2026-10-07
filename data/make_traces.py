@@ -38,8 +38,11 @@ def templated(tok, text: str, mode: str) -> str:
     """
     if mode == "raw":
         return text
+    # enable_thinking passed explicitly, as the reference pipeline does. Qwen3
+    # already defaults to thinking on, but the run should not rest on a default.
     return tok.apply_chat_template(
-        [{"role": "user", "content": text}], tokenize=False, add_generation_prompt=True
+        [{"role": "user", "content": text}], tokenize=False, add_generation_prompt=True,
+        enable_thinking=True,
     )
 
 

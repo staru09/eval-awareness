@@ -10,34 +10,47 @@ For a chosen set of prompts with labels, rank each prompt's probe score at one l
 against its label. That gives an AUROC for the layer. Doing it at all 36 layers
 gives a curve.
 
-Every number is reported as **effect**, `|AUROC - 0.5|`. 0 is chance, 0.5 is
-perfect. An AUROC and an effect are never put side by side, because they are on
-different scales.
+Every number is reported as **raw AUROC**, as the reference pipeline does. Label 1
+means test, and test prompts are expected to score higher, so:
+
+- above 0.5 is separation in the expected direction
+- 0.5 is none
+- below 0.5 is separation in the opposite direction, reported as that and never
+  counted as success
+
+Nothing is folded into `|AUROC - 0.5|`. Folding counted both sides as success, and
+hid that on earlier data several "wins" were below 0.5.
 
 ## The headline number
 
 - **Reduction:** whole prompt, the average over all tokens.
 - **Template:** raw. The chat-template number is reported beside it.
 - **Layer:** all 36 are searched. The headline is the best **3-layer band**, the
-  mean effect over three neighbouring layers, because one lucky layer moves it
-  less than it moves a single peak. The single best layer is reported beside it.
+  mean AUROC over three neighbouring layers, taking the highest band, because one
+  lucky layer moves it less than it moves a single peak. The single best layer is
+  reported beside it.
 
 Searching layers is allowed only because the controls search them too.
 
 ## Three controls, all must be beaten
 
 **1. Random directions, given the same freedom.** 100 random unit directions, scored
-on the same prompts. Each one gets its own best 3-layer band over all 36 layers,
-exactly as the real direction does. The floor is the best of the 100. We also give
-a p-value: how many of the 100 did as well as the real direction, plus one, over
-101. The smallest possible is 0.0099.
+on the same prompts. Each one gets its own highest 3-layer band over all 36 layers,
+exactly as the real direction does, on the same side of 0.5. The floor is the best
+of the 100. We also give a p-value: how many of the 100 did as well as the real
+direction, plus one, over 101. The smallest possible is 0.0099.
+
+The old floor, used in the earlier runs, was weaker on three counts. It drew only
+10 random directions. It scored them at one layer, the one where the real probe
+had already peaked, so the real probe got to search and the randoms did not. And it
+folded both sides, so it was compared against a folded real number.
 
 Comparing a searched peak against a random floor taken at one fixed layer is never
 done. It is the mistake that made an earlier result look real: the same effect beat
 a same-layer floor and lost to an any-layer floor.
 
 **2. Shuffled labels.** 2000 random reshufflings of the labels. Inside each one,
-take the best band over all layers, as for the real labels. This tells us how big a
+take the highest band over all layers, as for the real labels. This tells us how big a
 best band chance produces when the search is included.
 
 **3. Text alone.** The same AUROC computed from the text with no model at all:

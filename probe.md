@@ -68,15 +68,28 @@ Any other reduction means running the prompts through the model again.
 No threshold is ever fitted. Each layer's 36 scores across all prompts are ranked
 against the labels, giving an AUROC per layer.
 
-**The sign is fixed and never flipped.** A high score means "real user". So a
-working probe gives an AUROC **below** 0.5 against a label where 1 means test. To
-keep the direction honest, we report the effect as distance from chance:
+**AUROC is reported raw, in one direction fixed in advance.** This matches the
+reference pipeline, `evaluation-awareness/cls_corr_mi`. Label 1 means test, the
+score is used as it comes, and **evaluation prompts are expected to score higher**.
+So:
 
-```
-effect = |AUROC - 0.5|
-```
+- above 0.5 means separation in the expected direction
+- 0.5 means no separation
+- below 0.5 means separation in the **opposite** direction, and is reported as
+  that, never as success
 
-0 means the probe sees no difference. 0.5 means perfect separation.
+Nothing is folded. We used to report `|AUROC - 0.5|`, which made a probe pointing
+the wrong way look like a working one.
+
+**The expected direction looks backwards, and is still the right one to fix.** The
+direction is built as "real user" minus "evaluator", yet the reference expects test
+prompts to score higher on it. That is what the published pipeline does for
+Qwen3-8B, and our own strongest earlier number, 0.835, sat on that side too. We fix
+the side the published work uses rather than the side the phrase labels suggest.
+
+**Layer numbers.** The reference numbers hidden-state slots, where slot 0 is the
+embedding output. We number decoder layers from 0. Our layer `L` is their layer
+`L + 1`. Add 1 when comparing with the paper.
 
 ## Which reduction is the headline
 

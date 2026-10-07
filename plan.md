@@ -47,12 +47,17 @@ tested. That needs answer keys, which the dataset does not store.
 
 Full detail in `eval.md`. In short:
 
-1. Headline is the whole-prompt reduction, raw template, best 3-layer band over all
-   36 layers.
-2. Every control searches layers the same way the probe does: 100 random directions
-   each at their own best band, and 2000 label shuffles each at their best band.
+0. AUROC is reported raw, matching the reference pipeline: test prompts are
+   expected to score higher, above 0.5 is success, below 0.5 is separation the
+   wrong way and is reported as that. Nothing is folded into `|AUROC - 0.5|`.
+1. Headline is the whole-prompt reduction, raw template, highest 3-layer band over
+   all 36 layers.
+2. Every control searches layers the same way the probe does, on the same side of
+   0.5: 100 random directions each at their own highest band, and 2000 label
+   shuffles each at their highest band.
 3. A result must also beat counting words. For RQ1 that floor is 0.624.
-4. Layers 10 and 14 are reported as a pre-chosen, uncorrected second read.
+4. Layers 10 and 14 are reported as a pre-chosen, uncorrected second read. These
+   are our decoder-layer numbers; the reference paper calls them 11 and 15.
 5. Tier D stays out of the RQ1, RQ2 and RQ3 comparisons.
 6. A null is written up, not rerun with more settings.
 
@@ -68,7 +73,12 @@ the check is shown.
 - `ssh azure-btc`, `sudo chown azureuser /nvme`, clone the repo, check out `todo`,
   build the venv with uv, pin `datasets>=4.0`, download `Qwen/Qwen3-8B`.
 - Copy `data/corpus.json` up. It is not in git.
-- **Check:** `nvidia-smi` shows the H100, the venv imports transformers.
+- **Tokenizer check against the reference.** The reference tokenizes with
+  `add_special_tokens=True`, we use `False`. Tokenize three phase1 prompts, raw and
+  chat-templated, both ways, and compare the token ids. If they differ, switch ours
+  to match before anything is captured.
+- **Check:** `nvidia-smi` shows the H100, the venv imports transformers, and the
+  tokenizer comparison printed: identical ids, or the change made.
 
 ### 2. Export phase1 into the format the tools read
 
