@@ -11,3 +11,4 @@ dashboard/dev.log
 *.md
 data/
 !todo.md
+!plan.md
