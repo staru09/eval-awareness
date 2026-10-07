@@ -82,7 +82,33 @@ the check is shown.
 - **Check:** `nvidia-smi` shows the H100, the venv imports transformers, and the
   tokenizer comparison printed: identical ids, or the change made.
 
-### 2. Export phase1 into the format the tools read
+### 2. Check that HF and vLLM give the same hidden states
+
+Decides how every later capture is done, so it runs before any of them.
+
+- **One prompt, identical input to both.** The same `phase1` prompt, wrapped in the
+  same chat template, thinking on, and tokenized to the same token ids. The ids are
+  printed from both sides and must match before anything is compared.
+- **HF:** one plain forward pass, `output_hidden_states=True`, keeping all 36
+  decoder layers at every prompt token.
+- **vLLM:** the `extract_hidden_states` path already in
+  `evalaware/activations.py`, on the same token ids, prefill only, one new token.
+- **Compare at every layer and every prompt token:**
+  - cosine similarity between the two hidden states
+  - the largest difference, as a share of the hidden state's size
+  - the probe score from each, which is the number every result is built on
+- **This also checks two things that could be silently wrong in the vLLM path:**
+  that its layer `L` is HF's layer `L`, and that the final norm it applies by hand
+  to layer 36 matches what HF returns.
+- **Decision, written down before the test runs:**
+  - cosine 0.99 or above at every layer and the probe scores agree: keep the plan
+    as it is, HF for the probe capture, vLLM for generation. Either source can then
+    be trusted.
+  - below that anywhere: stop. First rule out a layer offset or the norm. If the
+    gap is real, choose one source for all captures and never mix the two.
+- **Check:** the per-layer table for that prompt, and the token ids from both sides.
+
+### 3. Export phase1 into the format the tools read
 
 `make_traces.py`, `score` and the analysis read rows with `id`, `prompt_id`,
 `text`, `label`, `source` and `category`. `corpus.json` stores source and tier per
@@ -93,7 +119,7 @@ experiment under `roles`. A short export writes `data/phase1.json` from it:
 - **Check:** 1100 rows, 550 labelled test, tiers A 500, B 300, C 200, D 100, two
   printed rows.
 
-### 3. Build the probe with 100 random directions
+### 4. Build the probe with 100 random directions
 
 The random directions are fixed when the probe is built and the stored September
 probe carries its own count, so reusing it would silently keep a smaller floor.
@@ -104,7 +130,7 @@ probe carries its own count, so reusing it would silently keep a smaller floor.
 - **Check:** the cosine table, and `n_random` read back as 100. A cosine below 1.0
   anywhere is reported, not explained away.
 
-### 4. Capture activations
+### 5. Capture activations
 
 - `make_traces.py` on `data/phase1.json`, once `--template raw`, once
   `--template chat`. Tokenizer only.
@@ -112,7 +138,7 @@ probe carries its own count, so reusing it would silently keep a smaller floor.
 - **Check:** 1100 files per template, token counts as min, median and max, the
   retokenise check passing on every row. About 2.6 GB in total.
 
-### 5. Score and analyse
+### 6. Score and analyse
 
 - `score` on both templates.
 - New `scripts/analyze_phase1.py` producing everything `eval.md` lists: the curve,
@@ -126,12 +152,12 @@ probe carries its own count, so reusing it would silently keep a smaller floor.
 - **Check:** the replication number, then the full table, with the file each number
   came from. Nothing is interpreted until the table has been shown.
 
-### 6. Save the model's reasoning and answers, no steering
+### 7. Save the model's reasoning and answers, no steering
 
 The judge needs these, and any later steering result is compared against them.
 
 - `evalaware generate --backend vllm --no-activations` on `data/phase1.json`.
-  Activations already come from step 4, so none are captured here.
+  Activations already come from step 5, so none are captured here.
 - Chat template, thinking on, the sampling Qwen3 recommends for thinking and that
   our September run used: temperature 0.6, top_p 0.95, top_k 20, min_p 0. Up to
   32768 new tokens so reasoning is not cut short.
@@ -149,15 +175,15 @@ The judge needs these, and any later steering result is compared against them.
 - Read 10 traces by eye across tiers before the full run: reasoning present, answer
   present, the two split in the right place.
 
-### 7. Push everything to the Hub before the VM stops
+### 8. Push everything to the Hub before the VM stops
 
 - Zip and push activations, scores and analysis, from the VM, to the private repo.
-  The reasoning traces are already up, chunk by chunk, from step 6.
+  The reasoning traces are already up, chunk by chunk, from step 7.
 - **Check:** file count and total size read back from the Hub.
 
-### 8. Judge, later
+### 9. Judge, later
 
-Runs on CPU from the stored traces of step 6, any time after step 7.
+Runs on CPU from the stored traces of step 7, any time after step 8.
 `SEVERITY_PROMPT`, 0 to 3. Reports the share at each score per tier, and the
 correlation between each prompt's judge score and its probe score. The steered
 comparison in `eval.md` waits for steering.
