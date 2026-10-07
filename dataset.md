@@ -1,15 +1,83 @@
 # Datasets
 
-Every prompt set in this project, what each one represents, and the exact counts.
+Every prompt in this project, what each one represents, and the exact counts.
 Written 2026-10-07. All numbers measured from the files, not recalled.
 
 The model is `Qwen/Qwen3-8B`, 36 layers, 4096 dimensions. Only the `text` field is
-ever sent to it. The label, the source and the tier sit beside it and are never
-shown.
+ever sent to it. Everything else in a row sits beside it and is never shown.
 
-## The two sets we will run
+## One file: `data/corpus.json`
 
-### 1. `data/final_data.json`, 1100 prompts
+**1826 unique prompts.** Every experiment, past and planned, is a filter on this
+one file. Built by `data/build_corpus.py`.
+
+| Experiment | Prompts | Test | Not test | In the 100-300 band | Status |
+|---|---|---|---|---|---|
+| `phase1` | 1100 | 550 | 550 | 1094 | next run |
+| `wording` | 400 | 200 | 200 | 400 | built, parked |
+| `run1` | 100 | 50 | 50 | 68 | already run |
+| `run2` | 100 | 50 | 50 | 94 | already run |
+| `run3` | 308 | 258 | 50 | 282 | already run |
+
+Those add to 2008. The file holds 1826 because 147 prompts belong to more than one
+experiment and are stored once.
+
+### What a row looks like
+
+```json
+{
+ "id": "p0066",
+ "text": "Act as a marketing expert for a customs brokerage website. ...",
+ "n_chars": 163,
+ "n_words": 27,
+ "label": 0,
+ "content": "real_person",
+ "upstream": "ShareGPT, via viliana-dev/eval-awareness-2x2",
+ "in_band": true,
+ "roles": {
+  "phase1":  {"source": "sharegpt",      "tier": "B", "wording": null},
+  "wording": {"source": "casual_deploy", "tier": "D", "wording": "casual"}
+ },
+ "legacy_ids": ["phase1/sharegpt:055", "wording/casual_deploy:092"]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `label` | 1 if the prompt is a real evaluation, 0 if not. Same in every experiment. |
+| `content` | `evaluation` or `real_person`, which is the label in words. |
+| `in_band` | true when the prompt is 100 to 299 characters. |
+| `roles` | one entry per experiment the prompt belongs to, giving its source and tier **in that experiment** |
+| `wording` | `exam` or `casual` where wording is fixed by construction, the four 2x2 groups only. `null` everywhere else, because we never controlled it there and guessing would invent a variable. |
+| `legacy_ids` | the id the prompt had in each of the five old files, so old results still join |
+
+**Why `roles` is per experiment.** The same message can play a different part in a
+different experiment. The row above is a ShareGPT first turn. In `phase1` it is a
+real user in tier B. In `wording` it is the casual_deploy group. A single `source`
+field would have made one of those silently wrong.
+
+### Selecting an experiment
+
+```python
+import json
+rows = json.load(open("data/corpus.json", encoding="utf-8"))
+phase1 = [r for r in rows if "phase1" in r["roles"]]
+tier_b = [r for r in phase1 if r["roles"]["phase1"]["tier"] == "B"]
+```
+
+Always read the tier and source from `roles[experiment]`, never from another
+experiment's entry.
+
+### The five old files
+
+`final_data.json`, `dataset2.json`, `dataset_vea100.json`, `dataset_2x2.json` and
+`dataset_benchmarks.json` are what `build_corpus.py` reads. They stay on disk
+because the first three runs were made from them and their prompts must stay byte
+identical, but nothing new should read them directly. Read `corpus.json`.
+
+## What is inside it
+
+### 1. `phase1`, 1100 prompts
 
 Phase 1 at scale. Eleven sources, 100 prompts each. 550 labelled as a test and 550
 not. Every prompt is 100 to 300 characters and English, confirmed by langdetect.
@@ -23,7 +91,7 @@ not. Every prompt is 100 to 300 characters and English, confirmed by langdetect.
 | A | | gsm8k | 100 | 1 | 103/192/297 |
 | B | a real person talking to a chatbot | wildchat | 100 | 0 | 102/165/295 |
 | B | | lmsys | 100 | 0 | 102/148/294 |
-| B | | sharegpt | 100 | 0 | 105/177/299 |
+| B | | sharegpt | 100 | 0 | 105/178/299 |
 | C | written by a person, but for a dataset | oasst2 | 100 | 0 | 100/157/289 |
 | C | | no_robots | 100 | 0 | 100/181/299 |
 | D | the wording control, carried in whole | eval_awareness_2x2 | 100 | mixed | 106/189/319 |
@@ -67,9 +135,9 @@ oasst2               100 kept from   324             31%
 no_robots            100 kept from   223             45%
 ```
 
-Built by `data/build_final_data.py`, seed 0.
+Built by `data/build_final_data.py`, seed 0. Rebuilt once to remove four ShareGPT messages that had been sampled into tier B and tier D at the same time; the builder now refuses any text already taken by another source.
 
-### 2. `data/dataset2.json`, 400 prompts
+### 2. `wording`, 400 prompts
 
 The wording control. 100 per group, which is where we have chosen to keep it.
 Lengths matched across all four groups.

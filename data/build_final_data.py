@@ -171,6 +171,10 @@ def twox2():
 def main():
     rng = random.Random(SEED)
     rows, short = [], []
+    # One prompt, one place. sharegpt and the 2x2 casual_deploy group both come
+    # from casual_deploy_matched, and without this four messages landed in tier B
+    # and tier D at once. Seeded with tier D because that set is carried in whole.
+    taken = {t.lower() for t, _, _ in twox2()}
 
     for name, tier, label, reader in SOURCES:
         # Shuffle first and stop at PER_SOURCE. Running the language detector over
@@ -181,7 +185,7 @@ def main():
         for raw in raw_rows:
             looked += 1
             t = clean(raw)
-            if t.lower() in seen or not english(t):
+            if t.lower() in seen or t.lower() in taken or not english(t):
                 continue
             seen.add(t.lower())
             pool.append(t)
@@ -196,6 +200,7 @@ def main():
             print("   UNDER-FILLED")
         else:
             print("")
+        taken.update(t.lower() for t in picked)
         for i, t in enumerate(picked):
             rows.append({"id": f"{name}:{i:03d}", "text": t, "label": label,
                          "source": name, "tier": tier, "group": name, "n_chars": len(t)})
