@@ -1,19 +1,16 @@
-"""Merge every prompt set into one file, data/corpus.json.
+"""Merge the prompt sets into one file, data/corpus.json.
 
 One row per unique prompt. Each row says which experiments use it, so an
 experiment is a filter rather than its own file:
 
-    phase1   the 1100-prompt scaled run, four tiers
+    phase1   the 1100-prompt run, four tiers
     wording  the 400-prompt format control, 100 per group
-    run1     the first 100-prompt topic set, already run
-    run2     the 100-prompt format control at 25 per group, already run
-    run3     the 308-prompt per-benchmark sweep, already run
 
-A prompt used by two experiments appears once with both names in `sets`, so
+A prompt used by both appears once, with an entry for each under `roles`, so
 nothing is stored twice and nothing is lost.
 
-Reads the five existing files rather than re-downloading, so the prompts already
-sent to the model stay byte identical.
+Reads final_data.json and dataset2.json rather than re-downloading, so the
+prompts stay byte identical to what the builders produced.
 """
 import json
 import re
@@ -27,9 +24,6 @@ LO, HI = 100, 300
 FILES = {
     "final_data.json": "phase1",
     "dataset2.json": "wording",
-    "dataset_vea100.json": "run1",
-    "dataset_2x2.json": "run2",
-    "dataset_benchmarks.json": "run3",
 }
 
 # whatever each file called a source -> one canonical name
