@@ -114,10 +114,15 @@ probe carries its own count, so reusing it would silently keep a smaller floor.
 
 - `score` on both templates.
 - New `scripts/analyze_phase1.py` producing everything `eval.md` lists: the curve,
-  the band, the two pre-chosen layers, all three controls, for RQ1, RQ2 and RQ3.
+  the band, the two pre-chosen layers, all three controls, and beside each AUROC its
+  95% interval, Cohen's d and catch rate at 5% false alarms, for RQ1, RQ2 and RQ3.
+- **Replication check first.** Chat template, last token, 100 MASK against 100
+  WildChat, peak reported in the paper's layer numbering next to the paper's cited
+  Qwen3-8B number. If it is far off, stop and find the pipeline difference before
+  reading anything else.
 - Smoke test it on 20 prompts first.
-- **Check:** the full table, with the file each number came from. Nothing is
-  interpreted until the table has been shown.
+- **Check:** the replication number, then the full table, with the file each number
+  came from. Nothing is interpreted until the table has been shown.
 
 ### 6. Steering
 

@@ -64,6 +64,44 @@ for the planned comparisons, by words, the weaker control:
 | tier A against tier C | 0.579 | 0.565 |
 | tier B against tier C | 0.552 | 0.501 |
 
+## Three numbers reported beside every AUROC
+
+AUROC says whether the two groups are ranked right. These say how sure we are, how
+far apart they are, and whether that would be usable.
+
+1. **95% confidence interval.** Resample the prompts with replacement 1000 times,
+   recompute the AUROC each time, report the 2.5th and 97.5th percentiles. Two
+   AUROCs whose intervals overlap are not called different.
+2. **Gap in standard deviations, Cohen's d.** The difference between the two
+   groups' mean scores divided by their pooled spread. Signed the same way as
+   AUROC: positive means test prompts score higher. Roughly 0.2 is small, 0.8 is
+   large.
+3. **Catch rate at 5% false alarms.** Set the cutoff so that 5% of the
+   not-test prompts are flagged, and report what share of the test prompts are
+   caught. This is what matters if the probe were ever used as a monitor, and it
+   can be poor even when AUROC looks fine.
+
+All three come from the scores already computed. No extra model run.
+
+## Replication check against the reference paper
+
+One number, so ours can sit next to the published one on the same comparison.
+
+- **Setting, exactly the reference's for Qwen3-8B:** chat template, thinking on,
+  last-token reduction, raw AUROC, every layer.
+- **Prompts:** the 100 MASK and 100 WildChat prompts in `phase1`. Same sources and
+  the same 100 against 100 as the paper's test set, but not the same prompts: ours
+  passed our length and language filter.
+- **Report:** the AUROC curve, its peak, and the peak layer in **their** numbering,
+  our layer plus 1. Beside it, the paper's Qwen3-8B number, read from the paper and
+  cited, not recalled.
+- **No threshold and no training split.** The paper's training split only sets a
+  cutoff for accuracy, which we do not report.
+
+This is a check that our pipeline reproduces theirs. It is not one of the research
+questions and is never the headline. If it lands far from the paper's number, that
+is a pipeline difference to find before anything else is interpreted.
+
 ## Secondary read, no correction needed
 
 Two layers chosen before any scores exist:
