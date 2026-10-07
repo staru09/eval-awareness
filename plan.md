@@ -12,7 +12,8 @@ wrong.
 
 - Model: `Qwen/Qwen3-8B` only.
 - Data: the `phase1` experiment in `data/corpus.json`, 1100 prompts.
-- Arms: probing on all 1100, steering on 300 of them.
+- Arms: probing on all 1100, and the model's own reasoning and answer on all 1100,
+  with no steering. Steering is decided later and is not part of this run.
 - The `wording` experiment stays parked. No other data is used.
 
 ## Research questions
@@ -36,9 +37,10 @@ holds only 25 per group, a size already known to be too small, so it is reported
 as a description and never as evidence.
 
 **RQ5. Does the model act on the direction?**
-Steered generations against a random direction at matched strength, judged on the
-0 to 3 scale. The share scored 3, meaning the model changes its answer because it
-thinks it is watched, is the headline.
+Deferred with steering. This run saves the unsteered reasoning and answers that any
+steering result will later be compared against, and that the judge can score now:
+how often the model says it is being tested, per tier, and whether that tracks the
+probe score.
 
 **Out of reach for this run:** whether the model scores worse when it thinks it is
 tested. That needs answer keys, which the dataset does not store.
@@ -124,29 +126,41 @@ probe carries its own count, so reusing it would silently keep a smaller floor.
 - **Check:** the replication number, then the full table, with the file each number
   came from. Nothing is interpreted until the table has been shown.
 
-### 6. Steering
+### 6. Save the model's reasoning and answers, no steering
 
-- Rewrite `evalaware/steering.py` to generate with the chain of thought on and store
-  every trace. It scores nothing.
-- 300 prompts, 30 from each of the 10 sources in tiers A to C. Chat template,
-  thinking on.
-- Six conditions: none, plus and minus at two strengths, random at matched
-  strength. 1800 generations. vLLM, not HF generate one at a time: at the earlier
-  rate of 70 seconds a prompt this would be 35 hours.
-- Smoke test: 2 prompts, 1 condition.
-- **Check:** the first 20 traces read by eye. The reasoning is present and the
-  steered text is not broken.
+The judge needs these, and any later steering result is compared against them.
+
+- `evalaware generate --backend vllm --no-activations` on `data/phase1.json`.
+  Activations already come from step 4, so none are captured here.
+- Chat template, thinking on, the sampling Qwen3 recommends for thinking and that
+  our September run used: temperature 0.6, top_p 0.95, top_k 20, min_p 0. Up to
+  32768 new tokens so reasoning is not cut short.
+- **Saved per prompt**, already built into the command: the prompt, the exact
+  templated string, the full output, the reasoning trace, the final answer, token
+  counts, the generation settings, and why generation stopped.
+- **Run in 5 chunks of 220 and push to the Hub after each one.** The command writes
+  its file only when a whole batch finishes, so a crash or VM stop mid-batch loses
+  everything since the last write. It skips prompts already done, so each chunk
+  adds to the same file.
+- Smoke test: 3 prompts first.
+- **Check:** after each chunk, the count saved, how many hit the token limit, and
+  how many have no reasoning trace. Report a cut-off or empty trace as soon as it
+  shows, not at the end.
+- Read 10 traces by eye across tiers before the full run: reasoning present, answer
+  present, the two split in the right place.
 
 ### 7. Push everything to the Hub before the VM stops
 
-- Zip and push activations, scores, analysis and traces, from the VM, to the
-  private repo.
+- Zip and push activations, scores and analysis, from the VM, to the private repo.
+  The reasoning traces are already up, chunk by chunk, from step 6.
 - **Check:** file count and total size read back from the Hub.
 
 ### 8. Judge, later
 
-Runs on CPU from the stored traces, any time after step 7. Method in `eval.md`:
-blind to condition, `SEVERITY_PROMPT`, steered compared with random.
+Runs on CPU from the stored traces of step 6, any time after step 7.
+`SEVERITY_PROMPT`, 0 to 3. Reports the share at each score per tier, and the
+correlation between each prompt's judge score and its probe score. The steered
+comparison in `eval.md` waits for steering.
 
 ## Rules for staying on track
 
@@ -168,11 +182,12 @@ blind to condition, `SEVERITY_PROMPT`, steered compared with random.
   the published result replicates.
 - **The best band loses to its controls.** The answer to RQ1 is no, and the run is
   finished.
-- **Steering moves nothing.** Expected; published work recovers under 5 percent of
-  the behaviour. Written up as a null.
-- **The judge disagrees with itself.** The steering result cannot be used.
+- **Many generations hit the 32768-token limit or come back without a reasoning
+  trace.** Reported per chunk as it happens. Cut-off traces are kept and marked,
+  not dropped, since dropping them would bias the judge toward short answers.
+- **The judge disagrees with itself.** Its scores cannot be used.
 
 ## Not in this run
 
-Base against instruct, smaller models, the Jacobian lens, the logit monitor, the
+Steering, base against instruct, smaller models, the Jacobian lens, the logit monitor, the
 `wording` experiment, and any scoring against answer keys. They stay in `todo.md`.
